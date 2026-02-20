@@ -7,6 +7,6 @@ import 'dotenv/config';
 const PORT = process.env.PORT || 5000;
 routes(app);
 
-app.listen(PORT, () => {
-  console.log(`✅ API corriendo en http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0',() => {
+  console.log(`✅ API corriendo en:${PORT}`);
 });
