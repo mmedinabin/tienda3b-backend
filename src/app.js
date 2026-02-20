@@ -14,4 +14,17 @@ app.use('/uploads', express.static('uploads'))
 //   res.json({ message: 'API Minimarket POS funcionando 🚀' });
 // });
 
+// 🔥 Middleware global de errores
+app.use((err, req, res, next) => {
+  console.error("🔥 ERROR GLOBAL:", err);
+
+  res.status(500).json({
+    message: err.message,
+    code: err.code,
+    errno: err.errno,
+    sqlMessage: err.sqlMessage,
+  });
+});
+
+
 export default app;
