@@ -1,0 +1,33 @@
+import authRoutes from "./modules/auth/auth.routes.js";
+import usuariosRoutes from "./modules/usuarios/usuarios.routes.js";
+import rolesRoutes from "./modules/roles/roles.routes.js";
+import sucursalesRoutes from "./modules/sucursales/sucursales.routes.js";
+import clientesRoutes from "./modules/clientes/clientes.routes.js";
+import proveedoresRoutes from "./modules/proveedores/proveedores.routes.js";
+import productosRoutes from "./modules/productos/productos.routes.js";
+import categoriasRoutes from "./modules/categorias/categorias.routes.js";
+import empleadosRoutes from "./modules/empleados/empleados.routes.js";
+import ciudadesRoutes from "./modules/sucursales/ciudades.routes.js";
+import comprasRoutes from "./modules/compras/compras.routes.js";
+import ventasRoutes from "./modules/ventas/ventas.routes.js";
+import marcasRoutes from "./modules/marcas/marcas.routes.js";
+import stockRoutes from "./modules/stock/stock.routes.js";
+import dashboardRoutes from "./modules/dashboard/dashboard.routes.js";
+
+export default (app) => {
+  app.use("/api/auth", authRoutes);
+  app.use("/api/usuarios", usuariosRoutes);
+  app.use("/api/roles", rolesRoutes);
+  app.use("/api/sucursales", sucursalesRoutes);
+  app.use("/api/ciudades", ciudadesRoutes);
+  app.use("/api/clientes", clientesRoutes);
+  app.use("/api/proveedores", proveedoresRoutes);
+  app.use("/api/productos", productosRoutes);
+  app.use("/api/categorias", categoriasRoutes);
+  app.use("/api/empleados", empleadosRoutes);
+  app.use("/api/compras", comprasRoutes);
+  app.use("/api/ventas", ventasRoutes);
+  app.use("/api/marcas", marcasRoutes);
+  app.use("/api/stock", stockRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
+};
