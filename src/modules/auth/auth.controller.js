@@ -44,6 +44,7 @@ export const login = async (req, res, next) => {
 
     res.json({ token });
   } catch (error) {
+    console.error("🔥 ERROR LOGIN:", error);
     next(error);
   }
 };
