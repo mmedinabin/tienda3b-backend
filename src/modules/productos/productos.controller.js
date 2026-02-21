@@ -598,7 +598,15 @@ try {
       [sucursalId]
     );
 
-    res.json(rows);
+    const productos = rows.map((p) => ({
+      ...p,
+      precio_venta: Number(p.precio_venta),
+      stock: Number(p.stock),
+    }));
+
+    res.json(productos);
+
+    //res.json(rows);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: "Error POS" });

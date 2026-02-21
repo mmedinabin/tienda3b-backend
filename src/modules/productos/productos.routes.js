@@ -37,12 +37,6 @@ router.get(
   obtenerProducto
 );
 
-
-
-
-// router.get('/', authMiddleware, sucursalContext, checkPermiso('productos', 'ver'), listarProductos, cargarProductosPOS );
-// router.get('/:id', authMiddleware, sucursalContext, obtenerProducto);
-
 router.post(
   '/',
   authMiddleware,
