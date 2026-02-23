@@ -293,7 +293,7 @@ export const listarComprass = async (req, res) => {
     res.status(500).json({ message: "Error al listar compras" });
   }
 };
-export const listarCompras = async (req, res) => {
+export const listarComprasb = async (req, res) => {
   try {
     const [rows] = await pool.query(`
       SELECT 
@@ -306,6 +306,36 @@ export const listarCompras = async (req, res) => {
         p.nombre AS proveedor
       FROM compras c
       JOIN proveedores p ON p.id = c.proveedor_id
+      ORDER BY c.id DESC
+    `);
+
+    res.json(rows);
+
+  } catch (error) {
+    console.error("ERROR LISTAR COMPRAS:", error);
+    res.status(500).json({ message: "Error al listar compras" });
+  }
+};
+
+export const listarCompras = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        c.id,
+        c.codigo,
+        c.fecha_compra AS fecha,
+        c.tipo_pago,
+        c.total,
+        c.saldo,
+        p.nombre AS proveedor,
+
+        CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal
+
+      FROM compras c
+      JOIN proveedores p ON p.id = c.proveedor_id
+      JOIN sucursales s ON s.id = c.sucursal_id
+      JOIN ciudades ci ON ci.id = s.ciudad_id
+
       ORDER BY c.id DESC
     `);
 
