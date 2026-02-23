@@ -362,7 +362,6 @@ export const crearVenta = async (req, res) => {
   }
 };
 
-import pool from "../../db/pool.js";
 
 export const listarVentas = async (req, res) => {
   const sucursalId = req.sucursalActiva;
