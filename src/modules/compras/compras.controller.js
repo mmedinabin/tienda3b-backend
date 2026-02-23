@@ -96,7 +96,12 @@ export const crearCompra = async (req, res) => {
 
     if (total <= 0) throw new Error("Total inválido");
 
-    const abono = Number(abono_inicial || 0);
+    //const abono = Number(abono_inicial || 0);
+    let abono = Number(abono_inicial || 0);
+
+    if (tipo_pago === "CONTADO") {
+      abono = total; // automáticamente pagado completo
+    }
 
     if (abono < 0) throw new Error("Abono inválido");
     if (abono > total) throw new Error("El abono no puede ser mayor al total");
