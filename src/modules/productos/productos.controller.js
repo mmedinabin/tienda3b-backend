@@ -18,7 +18,7 @@ export const listarProductos = async (req, res) => {
     FROM productos p
     JOIN categorias c ON c.id = p.categoria_id
     LEFT JOIN marcas m ON m.id = p.marca_id
-    ORDER BY p.nombre
+    ORDER BY p.codigo ASC
   `);
   res.json(rows);
 };
