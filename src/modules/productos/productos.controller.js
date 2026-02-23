@@ -1,5 +1,6 @@
 import pool from "../../db/pool.js";
 import { guardarImagenProducto } from "../../utils/image.js";
+import { getUTCDateTime } from "../../utils/date.js";
 
 export const listarProductos = async (req, res) => {
   const [rows] = await pool.query(`
