@@ -1,7 +1,8 @@
 import pool from "../../db/pool.js";
 import { generarDocumentoPDF } from "../../services/documento.service.js";
+import { getUTCDateTime } from "../../utils/date.js";
 
-export const crearCompra = async (req, res) => {
+export const crearCompraaa = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
   /* =====================================================
@@ -104,24 +105,26 @@ export const crearCompra = async (req, res) => {
     /* =====================================================
        5️⃣ INSERTAR COMPRA
     ====================================================== */
-
+    const createdAt = getUTCDateTime();
     const [compraRes] = await conn.query(
       `
-      INSERT INTO compras
-      (codigo, proveedor_id, sucursal_id,
-       tipo_pago, total, saldo,
-       created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-      `,
+  INSERT INTO compras
+  (codigo, fecha_compra, proveedor_id, sucursal_id,
+   tipo_pago, total, saldo, estado,
+   created_by, created_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `,
       [
         codigo,
+        fecha, // 👈 viene YYYY-MM-DD del front
         Number(proveedor_id),
         Number(sucursalId),
         tipo_pago,
         total,
         saldo,
+        tipo_pago === "CONTADO" ? "PAGADA" : "PENDIENTE",
         req.user?.id || null,
-        fecha || new Date(),
+        createdAt,
       ],
     );
 
@@ -255,6 +258,275 @@ export const crearCompra = async (req, res) => {
 
     console.error("ERROR CREAR COMPRA:", error);
 
+    res.status(400).json({
+      message: error.message || "Error al registrar compra",
+    });
+  } finally {
+    conn.release();
+  }
+};
+
+export const crearCompra = async (req, res) => {
+  const sucursalId = req.sucursalActiva;
+
+  if (sucursalId === null || sucursalId === undefined) {
+    return res.status(400).json({
+      message:
+        "Debe seleccionar una sucursal específica para registrar la compra",
+    });
+  }
+
+  const {
+    proveedor_id,
+    fecha, // YYYY-MM-DD
+    tipo_pago,
+    abono_inicial,
+    productos,
+  } = req.body;
+
+  if (!proveedor_id) {
+    return res.status(400).json({ message: "Proveedor obligatorio" });
+  }
+
+  if (!fecha || !/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    return res.status(400).json({ message: "Fecha inválida" });
+  }
+
+  if (!productos || productos.length === 0) {
+    return res.status(400).json({ message: "No hay productos en la compra" });
+  }
+
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const nowUTC = getUTCDateTime();
+
+    /* ==============================
+       1️⃣ GENERAR CÓDIGO
+    ============================== */
+
+    const [[sucursal]] = await conn.query(
+      `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
+      [sucursalId]
+    );
+
+    if (!sucursal) throw new Error("Sucursal inválida");
+
+    let [[row]] = await conn.query(
+      `SELECT ultimo_numero 
+       FROM secuencias 
+       WHERE tipo = 'COMPRA' AND sucursal_id = ?
+       FOR UPDATE`,
+      [sucursalId]
+    );
+
+    if (!row) {
+      await conn.query(
+        `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
+         VALUES ('COMPRA', ?, 0)`,
+        [sucursalId]
+      );
+      row = { ultimo_numero: 0 };
+    }
+
+    const siguienteNumero = row.ultimo_numero + 1;
+
+    await conn.query(
+      `UPDATE secuencias 
+       SET ultimo_numero = ?
+       WHERE tipo = 'COMPRA' AND sucursal_id = ?`,
+      [siguienteNumero, sucursalId]
+    );
+
+    const codigo = `C-${sucursal.codigo_sucursal}-${String(
+      siguienteNumero
+    ).padStart(5, "0")}`;
+
+    /* ==============================
+       2️⃣ CALCULAR TOTAL / SALDO / ESTADO
+    ============================== */
+
+    const total = productos.reduce(
+      (acc, p) =>
+        acc + Number(p.cantidad) * Number(p.costo_unitario),
+      0
+    );
+
+    if (total <= 0) throw new Error("Total inválido");
+
+    const abono = Number(abono_inicial || 0);
+
+    if (abono < 0) throw new Error("Abono inválido");
+    if (abono > total) throw new Error("El abono no puede ser mayor al total");
+
+    let saldo =
+      tipo_pago === "CONTADO" ? 0 : total - abono;
+
+    let estado;
+
+    if (saldo <= 0) estado = "PAGADA";
+    else if (saldo === total) estado = "PENDIENTE";
+    else estado = "PARCIAL";
+
+    /* ==============================
+       3️⃣ INSERTAR COMPRA
+    ============================== */
+
+    const [compraRes] = await conn.query(
+      `INSERT INTO compras
+       (codigo, fecha_compra, proveedor_id, sucursal_id,
+        tipo_pago, total, saldo, estado,
+        created_by, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        codigo,
+        fecha,
+        proveedor_id,
+        sucursalId,
+        tipo_pago,
+        total,
+        saldo,
+        estado,
+        req.user?.id,
+        nowUTC,
+      ]
+    );
+
+    const compraId = compraRes.insertId;
+
+    /* ==============================
+       4️⃣ DETALLE + LOTES + STOCK + KARDEX
+    ============================== */
+
+    for (const p of productos) {
+      const cantidad = Number(p.cantidad);
+      const costo = Number(p.costo_unitario);
+      const subtotal = cantidad * costo;
+
+      if (cantidad <= 0 || costo <= 0) {
+        throw new Error("Cantidad o costo inválido");
+      }
+
+      const [detalleRes] = await conn.query(
+        `INSERT INTO compra_detalle
+         (compra_id, producto_id, cantidad,
+          costo_unitario, costo_subtotal)
+         VALUES (?, ?, ?, ?, ?)`,
+        [compraId, p.producto_id, cantidad, costo, subtotal]
+      );
+
+      const detalleId = detalleRes.insertId;
+
+      await conn.query(
+        `INSERT INTO lotes
+         (producto_id, sucursal_id, compra_detalle_id,
+          origen, fecha_vencimiento,
+          costo_unitario, cantidad_inicial,
+          cantidad_actual, created_at)
+         VALUES (?, ?, ?, 'COMPRA', ?, ?, ?, ?, ?)`,
+        [
+          p.producto_id,
+          sucursalId,
+          detalleId,
+          p.fecha_vencimiento || null,
+          costo,
+          cantidad,
+          cantidad,
+          nowUTC,
+        ]
+      );
+
+      await conn.query(
+        `INSERT INTO stock
+         (producto_id, sucursal_id, cantidad, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           cantidad = cantidad + VALUES(cantidad),
+           updated_at = ?`,
+        [
+          p.producto_id,
+          sucursalId,
+          cantidad,
+          nowUTC,
+          nowUTC,
+          nowUTC,
+        ]
+      );
+
+      await conn.query(
+        `INSERT INTO kardex
+         (producto_id, sucursal_id,
+          tipo, referencia,
+          cantidad, costo_unitario,
+          total, created_at)
+         VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?)`,
+        [
+          p.producto_id,
+          sucursalId,
+          codigo,
+          cantidad,
+          costo,
+          subtotal,
+          nowUTC,
+        ]
+      );
+    }
+
+    /* ==============================
+       5️⃣ INSERTAR ABONO SI EXISTE
+    ============================== */
+
+    if (tipo_pago === "CREDITO" && abono > 0) {
+      await conn.query(
+        `INSERT INTO compra_pagos
+         (compra_id, monto, fecha,
+          created_at, created_by, estado)
+         VALUES (?, ?, ?, ?, ?, 'ACTIVO')`,
+        [
+          compraId,
+          abono,
+          fecha,
+          nowUTC,
+          req.user?.id,
+        ]
+      );
+    }
+
+    /* ==============================
+       6️⃣ AUDITORÍA
+    ============================== */
+
+    await conn.query(
+      `INSERT INTO auditoria
+       (tabla, registro_id, accion,
+        detalle, usuario_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        "compras",
+        compraId,
+        "INSERT",
+        JSON.stringify({
+          codigo,
+          proveedor_id,
+          total,
+          saldo,
+          estado,
+        }),
+        req.user?.id,
+        nowUTC,
+      ]
+    );
+
+    await conn.commit();
+
+    res.status(201).json({
+      message: "Compra registrada correctamente",
+      codigo,
+    });
+  } catch (error) {
+    await conn.rollback();
     res.status(400).json({
       message: error.message || "Error al registrar compra",
     });
