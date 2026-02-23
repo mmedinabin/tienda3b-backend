@@ -1,5 +1,6 @@
 import pool from "../../db/pool.js";
 import { getUTCDateTime } from "../../utils/date.js";
+import PDFDocument from "pdfkit";
 
 export const crearVenta = async (req, res) => {
   const sucursalId = req.sucursalActiva;
@@ -361,309 +362,259 @@ export const crearVenta = async (req, res) => {
   }
 };
 
-// export const crearVenta = async (req, res) => {
-//   const sucursalId = req.sucursalActiva;
+import pool from "../../db/pool.js";
 
-//   if (sucursalId === null || sucursalId === undefined) {
-//     return res.status(400).json({
-//       message:
-//         "Debe seleccionar una sucursal específica para registrar la venta",
-//     });
-//   }
+export const listarVentas = async (req, res) => {
+  const sucursalId = req.sucursalActiva;
 
-//   const { cliente_id, tipo_pago, abono_inicial, productos } = req.body;
+  if (sucursalId === null || sucursalId === undefined) {
+    return res.status(400).json({
+      message:
+        "Debe seleccionar una sucursal específica para registrar la compra",
+    });
+  }
 
-//   if (!productos || productos.length === 0) {
-//     return res.status(400).json({
-//       message: "No hay productos en la venta",
-//     });
-//   }
+  try {
+    const [rows] = await pool.query(
+      `
+      SELECT 
+        v.id,
+        v.codigo,
+        DATE_SUB(v.created_at, INTERVAL 4 HOUR) AS fecha,
+        IFNULL(c.nombre, '-') AS cliente,
+        CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal,
+        v.tipo_pago,
+        v.total,
+        v.saldo,
+        v.estado,
+        v.estado_pago
+      FROM ventas v
+      LEFT JOIN clientes c ON c.id = v.cliente_id
+      INNER JOIN sucursales s ON s.id = v.sucursal_id
+      INNER JOIN ciudades ci ON ci.id = s.ciudad_id
+      WHERE v.sucursal_id = ?
+      ORDER BY v.id DESC
+      LIMIT 25
+      `,
+      [sucursalId]
+    );
 
-//   const tiposValidos = ["EFECTIVO", "TRANSFERENCIA", "CREDITO"];
-//   if (!tiposValidos.includes(tipo_pago)) {
-//     return res.status(400).json({ message: "Tipo de pago inválido" });
-//   }
+    res.json(rows);
+  } catch (error) {
+    console.error("ERROR LISTAR VENTAS:", error);
+    res.status(500).json({
+      message: "Error al listar ventas",
+    });
+  }
+};
 
-//   const conn = await pool.getConnection();
+export const descargarVentaPDF = async (req, res) => {
+  try {
+    const { id } = req.params;
 
-//   try {
-//     await conn.beginTransaction();
+    /* =============================
+       1️⃣ CABECERA VENTA
+    ============================== */
 
-//     /*1️⃣ GENERAR CÓDIGO DE VENTA (SIN SALTOS) */
-//     // 1. Obtener datos de la sucursal
-//     const [[sucursal]] = await conn.query(
-//       `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
-//       [sucursalId],
-//     );
+    const [[venta]] = await pool.query(
+      `
+      SELECT 
+        v.codigo,
+        v.created_at,
+        v.total,
+        v.saldo,
+        v.tipo_pago,
+        v.estado,
+        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+      FROM ventas v
+      LEFT JOIN clientes c ON c.id = v.cliente_id
+      WHERE v.id = ?
+      `,
+      [id]
+    );
 
-//     if (!sucursal) {
-//       throw new Error("Sucursal no válida");
-//     }
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada" });
+    }
 
-//     // 2. Bloquear fila de secuencia
-//     let [[row]] = await conn.query(
-//       `SELECT ultimo_numero
-//    FROM secuencias
-//    WHERE tipo = 'VENTA'
-//    AND sucursal_id = ?
-//    FOR UPDATE`,
-//       [sucursalId],
-//     );
+    /* =============================
+       2️⃣ DETALLE VENTA
+    ============================== */
 
-//     // 3. Si no existe secuencia, crearla
-//     if (!row) {
-//       await conn.query(
-//         `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
-//      VALUES ('VENTA', ?, 0)`,
-//         [sucursalId],
-//       );
+    const [detalle] = await pool.query(
+      `
+      SELECT 
+        d.cantidad,
+        d.precio_unitario,
+        d.precio_subtotal,
+        p.nombre
+      FROM venta_detalle d
+      JOIN productos p ON p.id = d.producto_id
+      WHERE d.venta_id = ?
+      `,
+      [id]
+    );
 
-//       row = { ultimo_numero: 0 };
-//     }
+    /* =============================
+       CONFIG PDF
+    ============================== */
 
-//     // 4. Calcular siguiente número
-//     const siguienteNumero = row.ultimo_numero + 1;
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=venta-${venta.codigo}.pdf`
+    );
 
-//     // 5. Actualizar secuencia
-//     await conn.query(
-//       `UPDATE secuencias
-//    SET ultimo_numero = ?
-//    WHERE tipo = 'VENTA'
-//    AND sucursal_id = ?`,
-//       [siguienteNumero, sucursalId],
-//     );
+    const doc = new PDFDocument({ margin: 50 });
+    doc.pipe(res);
 
-//     // 6. Generar código final
-//     const codigo = `V-${sucursal.codigo_sucursal}-${String(
-//       siguienteNumero,
-//     ).padStart(5, "0")}`;
+    /* =============================
+       ENCABEZADO EMPRESA
+    ============================== */
 
-//     /* =====================================================
-//        2️⃣ CALCULAR TOTAL VENTA
-//     ====================================================== */
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(22)
+      .text("TIENDA 3B", { align: "center" });
 
-//     const totalVenta = productos.reduce(
-//       (acc, p) => acc + Number(p.cantidad) * Number(p.precio_venta),
-//       0,
-//     );
+    doc
+      .font("Helvetica")
+      .fontSize(12)
+      .text("VallesCruceños", { align: "center" });
 
-//     if (totalVenta <= 0) {
-//       throw new Error("Total de venta inválido");
-//     }
+    doc.moveDown(0.5);
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
+    doc.moveDown();
 
-//     if (tipo_pago === "CREDITO") {
-//       if (Number(abono_inicial || 0) > totalVenta) {
-//         throw new Error("Abono no puede ser mayor al total");
-//       }
-//     }
+    /* =============================
+       TITULO
+    ============================== */
 
-//     const saldo =
-//       tipo_pago === "CREDITO" ? totalVenta - Number(abono_inicial || 0) : 0;
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text("RECIBO DE VENTA", { align: "center" });
 
-//     const estado_pago =
-//       tipo_pago === "CREDITO" && saldo > 0 ? "PENDIENTE" : "PAGADO";
+    doc.moveDown();
 
-//     /* =====================================================
-//        3️⃣ INSERTAR VENTA
-//     ====================================================== */
+    /* =============================
+       DATOS GENERALES
+    ============================== */
 
-//     const [ventaRes] = await conn.query(
-//       `INSERT INTO ventas
-//       (codigo, sucursal_id, cliente_id,
-//        tipo_pago, estado_pago,
-//        total, saldo,
-//        created_by)
-//       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-//       [
-//         codigo,
-//         sucursalId,
-//         cliente_id || null,
-//         tipo_pago,
-//         estado_pago,
-//         totalVenta,
-//         saldo,
-//         req.user?.id || null,
-//       ],
-//     );
+    doc.font("Helvetica").fontSize(11);
 
-//     const ventaId = ventaRes.insertId;
+    doc.text(`Código: ${venta.codigo}`);
+    doc.text(`Fecha: ${formatearFechaHoraBO(venta.created_at)}`);
+    doc.text(`Cliente: ${venta.cliente}`);
+    doc.text(`Tipo pago: ${venta.tipo_pago}`);
 
-//     let utilidadTotal = 0;
+    doc.moveDown();
 
-//     /* =====================================================
-//        4️⃣ DETALLE + FIFO
-//     ====================================================== */
+    /* =============================
+       TABLA DETALLE
+    ============================== */
 
-//     for (const p of productos) {
-//       const productoId = Number(p.producto_id);
-//       const cantidadVenta = Number(p.cantidad);
-//       const precioVenta = Number(p.precio_venta);
+    const startX = 50;
+    let y = doc.y;
 
-//       if (cantidadVenta <= 0 || precioVenta <= 0) {
-//         throw new Error("Cantidad o precio inválido");
-//       }
+    const colNro = startX;
+    const colDesc = 80;
+    const colCant = 330;
+    const colPrecio = 380;
+    const colSub = 460;
 
-//       await conn.query(`SELECT id FROM productos WHERE id = ? FOR UPDATE`, [
-//         productoId,
-//       ]);
+    doc.font("Helvetica-Bold").fontSize(10);
 
-//       // 🔴 VALIDACIÓN CRÍTICA — validar stock general
-//       const [[stockRow]] = await conn.query(
-//         `SELECT cantidad
-//          FROM stock
-//          WHERE producto_id = ?
-//          AND sucursal_id = ?
-//          FOR UPDATE`,
-//         [productoId, sucursalId],
-//       );
+    doc.text("#", colNro, y);
+    doc.text("Producto", colDesc, y);
+    doc.text("Cant.", colCant, y);
+    doc.text("Precio", colPrecio, y);
+    doc.text("Subtotal", colSub, y);
 
-//       if (!stockRow)
-//         throw new Error(`Stock no configurado para producto ${productoId}`);
+    y += 15;
+    doc.moveTo(50, y - 5).lineTo(545, y - 5).stroke();
 
-//       if (Number(stockRow.cantidad) < cantidadVenta)
-//         throw new Error(`Stock insuficiente para producto ${productoId}`);
+    doc.font("Helvetica").fontSize(10);
 
-//       /* ---- Insertar detalle comercial ---- */
-//       const [detalleRes] = await conn.query(
-//         `INSERT INTO venta_detalle
-//          (venta_id, producto_id, cantidad,
-//           precio_unitario, precio_subtotal)
-//          VALUES (?, ?, ?, ?, ?)`,
-//         [
-//           ventaId,
-//           productoId,
-//           cantidadVenta,
-//           precioVenta,
-//           cantidadVenta * precioVenta,
-//         ],
-//       );
+    detalle.forEach((item, index) => {
+      doc.text(index + 1, colNro, y);
+      doc.text(item.nombre, colDesc, y, { width: 230 });
+      doc.text(item.cantidad.toString(), colCant, y);
+      doc.text(formatearMoneda(item.precio_unitario), colPrecio, y);
+      doc.text(formatearMoneda(item.precio_subtotal), colSub, y);
+      y += 18;
+    });
 
-//       const detalleId = detalleRes.insertId;
+    y += 10;
+    doc.moveTo(300, y).lineTo(545, y).stroke();
+    y += 15;
 
-//       let cantidadRestante = cantidadVenta;
-//       let costoTotalProducto = 0;
+    /* =============================
+       TOTALES
+    ============================== */
 
-//       /* ---- Buscar lotes FIFO ---- */
+    doc.font("Helvetica-Bold").fontSize(12);
 
-//       const [lotes] = await conn.query(
-//         `SELECT *
-//          FROM lotes
-//          WHERE producto_id = ?
-//          AND sucursal_id = ?
-//          AND cantidad_actual > 0
-//          ORDER BY created_at ASC
-//          FOR UPDATE`,
-//         [productoId, sucursalId],
-//       );
+    doc.text(`TOTAL: ${formatearMoneda(venta.total)}`, 350, y, {
+      align: "right",
+      width: 195,
+    });
 
-//       for (const lote of lotes) {
-//         if (cantidadRestante <= 0) break;
+    y += 18;
 
-//         const disponible = Number(lote.cantidad_actual);
+    if (Number(venta.saldo) > 0) {
+      doc.text(`SALDO PENDIENTE: ${formatearMoneda(venta.saldo)}`, 350, y, {
+        align: "right",
+        width: 195,
+      });
+    }
 
-//         const consumir = Math.min(cantidadRestante, disponible);
+    doc.moveDown(3);
 
-//         const subtotalCosto = consumir * Number(lote.costo_unitario);
+    /* =============================
+       PIE
+    ============================== */
 
-//         /* ---- Registrar consumo lote ---- */
+    const fechaImpresion = formatearFechaHoraBO(new Date());
 
-//         await conn.query(
-//           `INSERT INTO venta_lotes
-//            (venta_detalle_id, lote_id,
-//             cantidad, costo_unitario, subtotal_costo)
-//            VALUES (?, ?, ?, ?, ?)`,
-//           [detalleId, lote.id, consumir, lote.costo_unitario, subtotalCosto],
-//         );
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .text(`Impreso el: ${fechaImpresion} (UTC-4)`, {
+        align: "right",
+      });
 
-//         /* ---- Descontar lote ---- */
+    doc.moveDown();
 
-//         await conn.query(
-//           `UPDATE lotes
-//            SET cantidad_actual = cantidad_actual - ?
-//            WHERE id = ?`,
-//           [consumir, lote.id],
-//         );
+    doc.fontSize(9).text("Documento generado electrónicamente", {
+      align: "center",
+    });
 
-//         cantidadRestante -= consumir;
-//         costoTotalProducto += subtotalCosto;
-//       }
+    doc.end();
+  } catch (error) {
+    console.error("ERROR PDF VENTA:", error);
+    res.status(500).json({ message: "Error al generar PDF" });
+  }
+};
 
-//       if (cantidadRestante > 0) {
-//         throw new Error(`Stock insuficiente para producto ${productoId}`);
-//       }
+/* =============================
+   FUNCIONES AUXILIARES
+============================= */
 
-//       /* ---- Actualizar stock general ---- */
-//       await conn.query(
-//         `UPDATE stock
-//          SET cantidad = cantidad - ?
-//          WHERE producto_id = ?
-//          AND sucursal_id = ?`,
-//         [cantidadVenta, productoId, sucursalId],
-//       );
+function formatearFechaHoraBO(fechaISO) {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleString("es-BO", {
+    timeZone: "America/La_Paz",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
 
-//       // 🟡 MEJORA promedio seguro
-//       const costoUnitarioPromedio = cantidadVenta > 0 ? costoTotalProducto / cantidadVenta : 0;
-
-//       /* ---- Kardex SALIDA ---- */
-//       await conn.query(
-//         `INSERT INTO kardex
-//         (producto_id, sucursal_id,
-//          tipo, referencia,
-//          cantidad, costo_unitario, total)
-//         VALUES (?, ?, 'SALIDA', ?, ?, ?, ?)`,
-//         [
-//           productoId,
-//           sucursalId,
-//           codigo,
-//           cantidadVenta,
-//           costoUnitarioPromedio,
-//           costoTotalProducto,
-//         ],
-//       );
-
-//       /* ---- Calcular utilidad ---- */
-
-//       const ingresoProducto = cantidadVenta * precioVenta;
-
-//       const utilidadProducto = ingresoProducto - costoTotalProducto;
-
-//       utilidadTotal += utilidadProducto;
-//     }
-
-//     /* =====================================================
-//        5️⃣ ACTUALIZAR UTILIDAD TOTAL
-//     ====================================================== */
-
-//     await conn.query(
-//       `UPDATE ventas
-//        SET utilidad_total = ?
-//        WHERE id = ?`,
-//       [utilidadTotal, ventaId],
-//     );
-
-//     await conn.commit();
-
-//     res.status(201).json({
-//       message: "Venta registrada correctamente",
-//       codigo,
-//       utilidad: utilidadTotal,
-//     });
-//   } catch (error) {
-//     await conn.rollback();
-
-//     // 🟡 MEJORA manejo deadlock
-//     if (error.code === "ER_LOCK_DEADLOCK") {
-//       return res.status(409).json({
-//         message: "Conflicto de concurrencia. Intente nuevamente.",
-//       });
-//     }
-
-//     console.error("ERROR CREAR VENTA:", error);
-
-//     res.status(400).json({
-//       message: error.message || "Error al registrar venta",
-//     });
-//   } finally {
-//     conn.release();
-//   }
-// };
+function formatearMoneda(valor) {
+  return `Bs ${Number(valor).toFixed(2)}`;
+}

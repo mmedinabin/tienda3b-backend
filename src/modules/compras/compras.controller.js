@@ -3,9 +3,6 @@ import pool from "../../db/pool.js";
 import { getUTCDateTime } from "../../utils/date.js";
 import PDFDocument from "pdfkit";
 
-function formatearMoneda(valor) {
-  return `Bs ${Number(valor).toFixed(2)}`;
-}
 
 export const crearCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
@@ -236,23 +233,6 @@ export const crearCompra = async (req, res) => {
           nowUTC,
         ],
       );
-      // await conn.query(
-      //   `INSERT INTO kardex
-      //    (producto_id, sucursal_id,
-      //     tipo, referencia,
-      //     cantidad, costo_unitario,
-      //     total, created_at)
-      //    VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?)`,
-      //   [
-      //     p.producto_id,
-      //     sucursalId,
-      //     codigo,
-      //     cantidad,
-      //     costo,
-      //     subtotal,
-      //     nowUTC,
-      //   ]
-      // );
     }
 
     /* ==============================
@@ -528,4 +508,8 @@ function formatearFechaHoraBO(fechaISO) {
     second: "2-digit",
     hour12: false,
   });
+  function formatearMoneda(valor) {
+  return `Bs ${Number(valor).toFixed(2)}`;
+}
+
 }
