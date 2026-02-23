@@ -3,6 +3,36 @@ import { generarDocumentoPDF } from "../../services/documento.service.js";
 import { getUTCDateTime } from "../../utils/date.js";
 import PDFDocument from "pdfkit";
 
+/* ====== FORMATEADORES ====== */
+
+function formatearFechaBO(fechaISO) {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleDateString("es-BO", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+function formatearFechaHoraBO(fechaISO) {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleString("es-BO", {
+    timeZone: "America/La_Paz",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
+
+function formatearMoneda(valor) {
+  return `Bs ${Number(valor).toFixed(2)}`;
+}
+
+
 export const crearCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
@@ -300,38 +330,8 @@ export const listarCompras = async (req, res) => {
   }
 };
 
-export const descargarCompraPDFaaaa = async (req, res) => {
-  const { id } = req.params;
 
-  const esMovil = req.headers["user-agent"]?.includes("Mobile");
-
-  try {
-    const { buffer, codigo } = await generarDocumentoPDF("COMPRA", id);
-
-    res.setHeader("Content-Type", "application/pdf");
-
-    if (esMovil) {
-      res.setHeader(
-        "Content-Disposition",
-        `attachment; filename=compra-${codigo}.pdf`,
-      );
-    } else {
-      res.setHeader(
-        "Content-Disposition",
-        `inline; filename=compra-${codigo}.pdf`,
-      );
-    }
-
-    res.send(buffer);
-  } catch (error) {
-    res.status(400).json({ message: error.message });
-  }
-};
-
-
-
-
-export const descargarCompraPDF = async (req, res) => {
+export const descargarCompraPDFaaa = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -431,6 +431,176 @@ export const descargarCompraPDF = async (req, res) => {
 
     doc.fontSize(9)
        .text(`Generado: ${getUTCDateTime()} UTC`, { align: "right" });
+
+    doc.end();
+
+  } catch (error) {
+    console.error("ERROR PDF COMPRA:", error);
+    res.status(500).json({ message: "Error al generar PDF" });
+  }
+};
+
+export const descargarCompraPDF = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [[compra]] = await pool.query(`
+      SELECT 
+        c.codigo,
+        c.fecha_compra,
+        c.total,
+        c.saldo,
+        p.nombre AS proveedor
+      FROM compras c
+      JOIN proveedores p ON p.id = c.proveedor_id
+      WHERE c.id = ?
+    `, [id]);
+
+    if (!compra) {
+      return res.status(404).json({ message: "Compra no encontrada" });
+    }
+
+    const [detalle] = await pool.query(`
+      SELECT 
+        d.cantidad,
+        d.costo_unitario,
+        d.costo_subtotal,
+        pr.nombre
+      FROM compra_detalle d
+      JOIN productos pr ON pr.id = d.producto_id
+      WHERE d.compra_id = ?
+    `, [id]);
+
+    /* ====== CONFIG RESPUESTA ====== */
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=compra-${compra.codigo}.pdf`
+    );
+
+    const doc = new PDFDocument({ margin: 50 });
+    doc.pipe(res);
+
+    /* ====== ENCABEZADO EMPRESA ====== */
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(22)
+      .text("TIENDA 3B", { align: "center" });
+
+    doc
+      .font("Helvetica")
+      .fontSize(12)
+      .text("VallesCruceños", { align: "center" });
+
+    doc.moveDown(0.5);
+
+    doc.moveTo(50, doc.y)
+       .lineTo(545, doc.y)
+       .stroke();
+
+    doc.moveDown();
+
+    /* ====== TÍTULO DOCUMENTO ====== */
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text("RECIBO DE COMPRA", { align: "center" });
+
+    doc.moveDown();
+
+    /* ====== DATOS GENERALES ====== */
+
+    doc.font("Helvetica").fontSize(11);
+
+    doc.text(`Código: ${compra.codigo}`);
+    doc.text(`Fecha de compra: ${formatearFechaBO(compra.fecha_compra)}`);
+    doc.text(`Proveedor: ${compra.proveedor}`);
+
+    doc.moveDown();
+
+    /* ====== TABLA ====== */
+
+    const startX = 50;
+    let y = doc.y;
+
+    const colNro = startX;
+    const colDesc = 80;
+    const colCant = 350;
+    const colCosto = 400;
+    const colSub = 470;
+
+    doc.font("Helvetica-Bold").fontSize(10);
+
+    doc.text("#", colNro, y);
+    doc.text("Producto", colDesc, y);
+    doc.text("Cant.", colCant, y);
+    doc.text("Costo", colCosto, y);
+    doc.text("Subtotal", colSub, y);
+
+    y += 15;
+
+    doc.moveTo(50, y - 5)
+       .lineTo(545, y - 5)
+       .stroke();
+
+    doc.font("Helvetica").fontSize(10);
+
+    detalle.forEach((item, index) => {
+      doc.text(index + 1, colNro, y);
+      doc.text(item.nombre, colDesc, y, { width: 250 });
+      doc.text(item.cantidad.toString(), colCant, y);
+      doc.text(formatearMoneda(item.costo_unitario), colCosto, y);
+      doc.text(formatearMoneda(item.costo_subtotal), colSub, y);
+      y += 18;
+    });
+
+    y += 10;
+
+    doc.moveTo(300, y)
+       .lineTo(545, y)
+       .stroke();
+
+    y += 15;
+
+    /* ====== TOTALES DERECHA ====== */
+
+    doc.font("Helvetica-Bold").fontSize(12);
+
+    doc.text(`TOTAL: ${formatearMoneda(compra.total)}`, 350, y, {
+      align: "right",
+      width: 195,
+    });
+
+    y += 20;
+
+    doc.text(`SALDO: ${formatearMoneda(compra.saldo)}`, 350, y, {
+      align: "right",
+      width: 195,
+    });
+
+    doc.moveDown(3);
+
+    /* ====== PIE CON HORA LOCAL ====== */
+
+    const fechaImpresion = formatearFechaHoraBO(new Date());
+
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .text(`Impreso el: ${fechaImpresion} (UTC-4)`, {
+        align: "right",
+      });
+
+    doc.moveDown();
+
+    doc
+      .fontSize(9)
+      .text("Documento generado electrónicamente", {
+        align: "center",
+      });
 
     doc.end();
 
