@@ -1,6 +1,7 @@
 import pool from "../../db/pool.js";
 import { generarDocumentoPDF } from "../../services/documento.service.js";
 import { getUTCDateTime } from "../../utils/date.js";
+import PDFDocument from "pdfkit";
 
 export const crearCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
@@ -271,52 +272,6 @@ export const crearCompra = async (req, res) => {
   }
 };
 
-export const listarComprass = async (req, res) => {
-  try {
-    const [rows] = await pool.query(`
-      SELECT 
-        c.id,
-        c.codigo,
-        c.created_at AS fecha,
-        c.tipo_pago,
-        c.total,
-        c.saldo,
-        p.nombre AS proveedor
-      FROM compras c
-      JOIN proveedores p ON p.id = c.proveedor_id
-      ORDER BY c.id DESC
-    `);
-
-    res.json(rows);
-  } catch (error) {
-    console.error("ERROR LISTAR COMPRAS:", error);
-    res.status(500).json({ message: "Error al listar compras" });
-  }
-};
-export const listarComprasb = async (req, res) => {
-  try {
-    const [rows] = await pool.query(`
-      SELECT 
-        c.id,
-        c.codigo,
-        c.fecha_compra AS fecha,
-        c.tipo_pago,
-        c.total,
-        c.saldo,
-        p.nombre AS proveedor
-      FROM compras c
-      JOIN proveedores p ON p.id = c.proveedor_id
-      ORDER BY c.id DESC
-    `);
-
-    res.json(rows);
-
-  } catch (error) {
-    console.error("ERROR LISTAR COMPRAS:", error);
-    res.status(500).json({ message: "Error al listar compras" });
-  }
-};
-
 export const listarCompras = async (req, res) => {
   try {
     const [rows] = await pool.query(`
@@ -328,15 +283,13 @@ export const listarCompras = async (req, res) => {
         c.total,
         c.saldo,
         p.nombre AS proveedor,
-
         CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal
-
       FROM compras c
       JOIN proveedores p ON p.id = c.proveedor_id
       JOIN sucursales s ON s.id = c.sucursal_id
       JOIN ciudades ci ON ci.id = s.ciudad_id
-
       ORDER BY c.id DESC
+      LIMIT 150
     `);
 
     res.json(rows);
@@ -347,7 +300,7 @@ export const listarCompras = async (req, res) => {
   }
 };
 
-export const descargarCompraPDF = async (req, res) => {
+export const descargarCompraPDFaaaa = async (req, res) => {
   const { id } = req.params;
 
   const esMovil = req.headers["user-agent"]?.includes("Mobile");
@@ -372,5 +325,117 @@ export const descargarCompraPDF = async (req, res) => {
     res.send(buffer);
   } catch (error) {
     res.status(400).json({ message: error.message });
+  }
+};
+
+
+
+
+export const descargarCompraPDF = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const [rows] = await pool.query(`
+      SELECT 
+        c.codigo,
+        c.fecha_compra,
+        c.total,
+        c.saldo,
+        p.nombre AS proveedor
+      FROM compras c
+      JOIN proveedores p ON p.id = c.proveedor_id
+      WHERE c.id = ?
+    `, [id]);
+
+    if (!rows.length) {
+      return res.status(404).json({ message: "Compra no encontrada" });
+    }
+
+    const compra = rows[0];
+
+    const [detalle] = await pool.query(`
+      SELECT 
+        d.cantidad,
+        d.costo_unitario,
+        d.costo_subtotal,
+        pr.nombre
+      FROM compra_detalle d
+      JOIN productos pr ON pr.id = d.producto_id
+      WHERE d.compra_id = ?
+    `, [id]);
+
+    // Configurar respuesta
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=compra-${compra.codigo}.pdf`
+    );
+
+    const doc = new PDFDocument({ margin: 40 });
+    doc.pipe(res);
+
+    // ===== TÍTULO =====
+    doc.fontSize(16).text("RECIBO DE COMPRA", { align: "center" });
+    doc.moveDown();
+
+    // ===== DATOS GENERALES =====
+    doc.fontSize(10);
+    doc.text(`Código: ${compra.codigo}`);
+    doc.text(`Fecha: ${compra.fecha_compra}`);
+    doc.text(`Proveedor: ${compra.proveedor}`);
+    doc.moveDown();
+
+    // ===== TABLA =====
+    doc.fontSize(10);
+
+    const startX = 40;
+    let y = doc.y;
+
+    // Encabezado
+    doc.text("Producto", startX, y);
+    doc.text("Cant.", 300, y);
+    doc.text("Costo", 350, y);
+    doc.text("Subtotal", 420, y);
+
+    y += 15;
+
+    doc.moveTo(40, y - 5)
+       .lineTo(550, y - 5)
+       .stroke();
+
+    // Filas
+    detalle.forEach(item => {
+      doc.text(item.nombre, startX, y);
+      doc.text(item.cantidad.toString(), 300, y);
+      doc.text(`Bs ${Number(item.costo_unitario).toFixed(2)}`, 350, y);
+      doc.text(`Bs ${Number(item.costo_subtotal).toFixed(2)}`, 420, y);
+      y += 15;
+    });
+
+    y += 10;
+
+    doc.moveTo(40, y)
+       .lineTo(550, y)
+       .stroke();
+
+    y += 10;
+
+    // Totales
+    doc.fontSize(12);
+    doc.text(`TOTAL: Bs ${Number(compra.total).toFixed(2)}`, 350, y);
+    y += 15;
+    doc.text(`SALDO: Bs ${Number(compra.saldo).toFixed(2)}`, 350, y);
+
+    doc.moveDown();
+    doc.moveDown();
+
+    doc.fontSize(9)
+       .text(`Generado: ${getUTCDateTime()} UTC`, { align: "right" });
+
+    doc.end();
+
+  } catch (error) {
+    console.error("ERROR PDF COMPRA:", error);
+    res.status(500).json({ message: "Error al generar PDF" });
   }
 };
