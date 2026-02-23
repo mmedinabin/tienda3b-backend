@@ -1,37 +1,11 @@
 import pool from "../../db/pool.js";
-import { generarDocumentoPDF } from "../../services/documento.service.js";
+//import { generarDocumentoPDF } from "../../services/documento.service.js";
 import { getUTCDateTime } from "../../utils/date.js";
 import PDFDocument from "pdfkit";
-
-/* ====== FORMATEADORES ====== */
-
-function formatearFechaBO(fechaISO) {
-  const fecha = new Date(fechaISO);
-  return fecha.toLocaleDateString("es-BO", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  });
-}
-
-function formatearFechaHoraBO(fechaISO) {
-  const fecha = new Date(fechaISO);
-  return fecha.toLocaleString("es-BO", {
-    timeZone: "America/La_Paz",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-}
 
 function formatearMoneda(valor) {
   return `Bs ${Number(valor).toFixed(2)}`;
 }
-
 
 export const crearCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
@@ -76,7 +50,7 @@ export const crearCompra = async (req, res) => {
 
     const [[sucursal]] = await conn.query(
       `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
-      [sucursalId]
+      [sucursalId],
     );
 
     if (!sucursal) throw new Error("Sucursal inválida");
@@ -86,14 +60,14 @@ export const crearCompra = async (req, res) => {
        FROM secuencias 
        WHERE tipo = 'COMPRA' AND sucursal_id = ?
        FOR UPDATE`,
-      [sucursalId]
+      [sucursalId],
     );
 
     if (!row) {
       await conn.query(
         `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
          VALUES ('COMPRA', ?, 0)`,
-        [sucursalId]
+        [sucursalId],
       );
       row = { ultimo_numero: 0 };
     }
@@ -104,11 +78,11 @@ export const crearCompra = async (req, res) => {
       `UPDATE secuencias 
        SET ultimo_numero = ?
        WHERE tipo = 'COMPRA' AND sucursal_id = ?`,
-      [siguienteNumero, sucursalId]
+      [siguienteNumero, sucursalId],
     );
 
     const codigo = `C-${sucursal.codigo_sucursal}-${String(
-      siguienteNumero
+      siguienteNumero,
     ).padStart(5, "0")}`;
 
     /* ==============================
@@ -116,9 +90,8 @@ export const crearCompra = async (req, res) => {
     ============================== */
 
     const total = productos.reduce(
-      (acc, p) =>
-        acc + Number(p.cantidad) * Number(p.costo_unitario),
-      0
+      (acc, p) => acc + Number(p.cantidad) * Number(p.costo_unitario),
+      0,
     );
 
     if (total <= 0) throw new Error("Total inválido");
@@ -128,8 +101,13 @@ export const crearCompra = async (req, res) => {
     if (abono < 0) throw new Error("Abono inválido");
     if (abono > total) throw new Error("El abono no puede ser mayor al total");
 
-    let saldo =
-      tipo_pago === "CONTADO" ? 0 : total - abono;
+    if (tipo_pago === "CONTADO") {
+      if (abono !== total)
+        throw new Error("Compra CONTADO debe pagarse completamente");
+    }
+
+    let saldo = total - abono;
+    //let saldo = tipo_pago === "CONTADO" ? 0 : total - abono;
 
     let estado;
 
@@ -158,7 +136,7 @@ export const crearCompra = async (req, res) => {
         estado,
         req.user?.id,
         nowUTC,
-      ]
+      ],
     );
 
     const compraId = compraRes.insertId;
@@ -181,7 +159,7 @@ export const crearCompra = async (req, res) => {
          (compra_id, producto_id, cantidad,
           costo_unitario, costo_subtotal)
          VALUES (?, ?, ?, ?, ?)`,
-        [compraId, p.producto_id, cantidad, costo, subtotal]
+        [compraId, p.producto_id, cantidad, costo, subtotal],
       );
 
       const detalleId = detalleRes.insertId;
@@ -202,7 +180,7 @@ export const crearCompra = async (req, res) => {
           cantidad,
           cantidad,
           nowUTC,
-        ]
+        ],
       );
 
       await conn.query(
@@ -212,23 +190,35 @@ export const crearCompra = async (req, res) => {
          ON DUPLICATE KEY UPDATE
            cantidad = cantidad + VALUES(cantidad),
            updated_at = ?`,
-        [
-          p.producto_id,
-          sucursalId,
-          cantidad,
-          nowUTC,
-          nowUTC,
-          nowUTC,
-        ]
+        [p.producto_id, sucursalId, cantidad, nowUTC, nowUTC, nowUTC],
       );
 
+      // 1️⃣ Obtener último saldo
+      const [[ultimo]] = await conn.query(
+        `SELECT saldo_cantidad, saldo_total
+   FROM kardex
+   WHERE producto_id = ? AND sucursal_id = ?
+   ORDER BY id DESC
+   LIMIT 1`,
+        [p.producto_id, sucursalId],
+      );
+
+      const saldoAnteriorCantidad = ultimo?.saldo_cantidad || 0;
+      const saldoAnteriorTotal = Number(ultimo?.saldo_total || 0);
+
+      // 2️⃣ Calcular nuevo saldo
+      const nuevoSaldoCantidad = saldoAnteriorCantidad + cantidad;
+      const nuevoSaldoTotal = saldoAnteriorTotal + subtotal;
+
+      // 3️⃣ Insertar en kardex con saldo acumulado
       await conn.query(
         `INSERT INTO kardex
-         (producto_id, sucursal_id,
-          tipo, referencia,
-          cantidad, costo_unitario,
-          total, created_at)
-         VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?)`,
+   (producto_id, sucursal_id,
+    tipo, referencia,
+    cantidad, costo_unitario,
+    total, saldo_cantidad,
+    saldo_total, created_at)
+   VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?, ?, ?)`,
         [
           p.producto_id,
           sucursalId,
@@ -236,9 +226,28 @@ export const crearCompra = async (req, res) => {
           cantidad,
           costo,
           subtotal,
+          nuevoSaldoCantidad,
+          nuevoSaldoTotal,
           nowUTC,
-        ]
+        ],
       );
+      // await conn.query(
+      //   `INSERT INTO kardex
+      //    (producto_id, sucursal_id,
+      //     tipo, referencia,
+      //     cantidad, costo_unitario,
+      //     total, created_at)
+      //    VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?)`,
+      //   [
+      //     p.producto_id,
+      //     sucursalId,
+      //     codigo,
+      //     cantidad,
+      //     costo,
+      //     subtotal,
+      //     nowUTC,
+      //   ]
+      // );
     }
 
     /* ==============================
@@ -251,13 +260,7 @@ export const crearCompra = async (req, res) => {
          (compra_id, monto, fecha,
           created_at, created_by, estado)
          VALUES (?, ?, ?, ?, ?, 'ACTIVO')`,
-        [
-          compraId,
-          abono,
-          fecha,
-          nowUTC,
-          req.user?.id,
-        ]
+        [compraId, abono, fecha, nowUTC, req.user?.id],
       );
     }
 
@@ -283,7 +286,7 @@ export const crearCompra = async (req, res) => {
         }),
         req.user?.id,
         nowUTC,
-      ]
+      ],
     );
 
     await conn.commit();
@@ -323,7 +326,6 @@ export const listarCompras = async (req, res) => {
     `);
 
     res.json(rows);
-
   } catch (error) {
     console.error("ERROR LISTAR COMPRAS:", error);
     res.status(500).json({ message: "Error al listar compras" });
@@ -334,7 +336,8 @@ export const descargarCompraPDF = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const [[compra]] = await pool.query(`
+    const [[compra]] = await pool.query(
+      `
       SELECT 
         c.codigo,
         c.fecha_compra,
@@ -344,13 +347,16 @@ export const descargarCompraPDF = async (req, res) => {
       FROM compras c
       JOIN proveedores p ON p.id = c.proveedor_id
       WHERE c.id = ?
-    `, [id]);
+    `,
+      [id],
+    );
 
     if (!compra) {
       return res.status(404).json({ message: "Compra no encontrada" });
     }
 
-    const [detalle] = await pool.query(`
+    const [detalle] = await pool.query(
+      `
       SELECT 
         d.cantidad,
         d.costo_unitario,
@@ -359,14 +365,16 @@ export const descargarCompraPDF = async (req, res) => {
       FROM compra_detalle d
       JOIN productos pr ON pr.id = d.producto_id
       WHERE d.compra_id = ?
-    `, [id]);
+    `,
+      [id],
+    );
 
     /* ====== CONFIG RESPUESTA ====== */
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename=compra-${compra.codigo}.pdf`
+      `inline; filename=compra-${compra.codigo}.pdf`,
     );
 
     const doc = new PDFDocument({ margin: 50 });
@@ -386,9 +394,7 @@ export const descargarCompraPDF = async (req, res) => {
 
     doc.moveDown(0.5);
 
-    doc.moveTo(50, doc.y)
-       .lineTo(545, doc.y)
-       .stroke();
+    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
 
     doc.moveDown();
 
@@ -432,9 +438,10 @@ export const descargarCompraPDF = async (req, res) => {
 
     y += 15;
 
-    doc.moveTo(50, y - 5)
-       .lineTo(545, y - 5)
-       .stroke();
+    doc
+      .moveTo(50, y - 5)
+      .lineTo(545, y - 5)
+      .stroke();
 
     doc.font("Helvetica").fontSize(10);
 
@@ -449,9 +456,7 @@ export const descargarCompraPDF = async (req, res) => {
 
     y += 10;
 
-    doc.moveTo(300, y)
-       .lineTo(545, y)
-       .stroke();
+    doc.moveTo(300, y).lineTo(545, y).stroke();
 
     y += 15;
 
@@ -486,16 +491,36 @@ export const descargarCompraPDF = async (req, res) => {
 
     doc.moveDown();
 
-    doc
-      .fontSize(9)
-      .text("Documento generado electrónicamente", {
-        align: "center",
-      });
+    doc.fontSize(9).text("Documento generado electrónicamente", {
+      align: "center",
+    });
 
     doc.end();
-
   } catch (error) {
     console.error("ERROR PDF COMPRA:", error);
     res.status(500).json({ message: "Error al generar PDF" });
   }
 };
+
+function formatearFechaBO(fechaISO) {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleDateString("es-BO", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+}
+
+function formatearFechaHoraBO(fechaISO) {
+  const fecha = new Date(fechaISO);
+  return fecha.toLocaleString("es-BO", {
+    timeZone: "America/La_Paz",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+}
