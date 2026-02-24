@@ -1,6 +1,6 @@
 import pool from '../../db/pool.js'
 
-export const obtenerDashboard = async (req, res) => {
+export const obtenerDashboardd = async (req, res) => {
   try {
     const sucursalId = req.sucursalActiva
 
@@ -160,3 +160,166 @@ export const obtenerDashboard = async (req, res) => {
     res.status(500).json({ message: 'Error obteniendo dashboard' })
   }
 }
+
+export const obtenerDashboard = async (req, res) => {
+  try {
+    const sucursalId = req.sucursalActiva;
+
+    const filtroSucursal = sucursalId == null
+      ? ''
+      : 'AND sucursal_id = ?';
+
+    const params = sucursalId == null ? [] : [sucursalId];
+
+    /* ===========================
+       VENTA HOY (Bolivia UTC-4)
+    ============================ */
+    const [[ventaHoyRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(total),0) AS venta_hoy
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      `,
+      params
+    );
+
+    /* ===========================
+       UTILIDAD HOY
+    ============================ */
+    const [[utilidadHoyRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(utilidad_total),0) AS utilidad_hoy
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      `,
+      params
+    );
+
+    /* ===========================
+       VENTA MES ACTUAL
+    ============================ */
+    const [[ventaMesRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(total),0) AS venta_mes
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND YEAR(CONVERT_TZ(created_at, '+00:00', '-04:00')) = YEAR(CURDATE())
+      AND MONTH(CONVERT_TZ(created_at, '+00:00', '-04:00')) = MONTH(CURDATE())
+      `,
+      params
+    );
+
+    /* ===========================
+       VENTA MES ANTERIOR
+    ============================ */
+    const [[ventaMesAnteriorRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(total),0) AS venta_mes_anterior
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND YEAR(CONVERT_TZ(created_at, '+00:00', '-04:00')) =
+          YEAR(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
+      AND MONTH(CONVERT_TZ(created_at, '+00:00', '-04:00')) =
+          MONTH(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
+      `,
+      params
+    );
+
+    /* ===========================
+       INVENTARIO VALORIZADO
+    ============================ */
+    const [[inventarioRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(l.cantidad_actual * l.costo_unitario),0) AS inventario_valorizado
+      FROM lotes l
+      ${sucursalId == null ? '' : 'WHERE l.sucursal_id = ? AND l.cantidad_actual > 0'}
+      `,
+      sucursalId == null ? [] : [sucursalId]
+    );
+
+    /* ===========================
+       TICKETS HOY
+    ============================ */
+    const [[ticketsHoyRes]] = await pool.query(
+      `
+      SELECT COUNT(*) AS tickets_hoy
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      `,
+      params
+    );
+
+    /* ===========================
+       PRODUCTOS BAJO STOCK
+    ============================ */
+    const [[bajoStockRes]] = await pool.query(
+      `
+      SELECT COUNT(*) AS productos_bajo_stock
+      FROM stock
+      ${sucursalId == null ? '' : 'WHERE sucursal_id = ?'}
+      AND cantidad <= 5
+      `,
+      sucursalId == null ? [] : [sucursalId]
+    );
+
+    /* ===========================
+       PRODUCTOS ACTIVOS
+    ============================ */
+    const [[productosRes]] = await pool.query(
+      `
+      SELECT COUNT(*) AS total_productos
+      FROM productos
+      WHERE estado = 1
+      `
+    );
+
+    /* ===========================
+       TOTAL UNIDADES
+    ============================ */
+    const [[unidadesRes]] = await pool.query(
+      `
+      SELECT IFNULL(SUM(cantidad),0) AS total_unidades
+      FROM stock
+      ${sucursalId == null ? '' : 'WHERE sucursal_id = ?'}
+      `,
+      sucursalId == null ? [] : [sucursalId]
+    );
+
+    /* ===========================
+       CRECIMIENTO %
+    ============================ */
+    const ventaMesActual = ventaMesRes.venta_mes;
+    const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior;
+
+    let crecimientoMes = 0;
+
+    if (ventaMesAnterior > 0) {
+      crecimientoMes =
+        ((ventaMesActual - ventaMesAnterior) / ventaMesAnterior) * 100;
+    }
+
+    res.json({
+      ventaHoy: ventaHoyRes.venta_hoy,
+      utilidadHoy: utilidadHoyRes.utilidad_hoy,
+      ventaMes: ventaMesActual,
+      crecimientoMes,
+      inventarioValorizado: inventarioRes.inventario_valorizado,
+      ticketsHoy: ticketsHoyRes.tickets_hoy,
+      productosBajoStock: bajoStockRes.productos_bajo_stock,
+      totalProductos: productosRes.total_productos,
+      totalUnidades: unidadesRes.total_unidades,
+    });
+
+  } catch (error) {
+    console.error('Error dashboard:', error);
+    res.status(500).json({ message: 'Error obteniendo dashboard' });
+  }
+};
