@@ -586,9 +586,14 @@ export const descargarVentaPDF = async (req, res) => {
     doc.pipe(res);
 
     const CONTENT_WIDTH = TICKET_WIDTH - MARGIN * 2;
+    // const colLeft = MARGIN;
+    // const colPrecio = 110;
+    // const colSub = 165;
+
     const colLeft = MARGIN;
+    const colCant = MARGIN + 8; // 👈 mover un poco a la derecha
     const colPrecio = 110;
-    const colSub = 165;
+    const colSub = 170; // 👈 un poco más a la derecha
 
     doc.lineWidth(0.5);
 
@@ -633,7 +638,8 @@ export const descargarVentaPDF = async (req, res) => {
 
       doc.font("Helvetica").fontSize(8);
 
-      doc.text(`${cantidad} x`, colLeft, lineY);
+      //doc.text(`${cantidad} x`, colLeft, lineY);
+      doc.text(`${cantidad} x`, colCant, lineY);
 
       doc.text(precio, colPrecio, lineY, {
         width: 50,
@@ -701,8 +707,13 @@ export const descargarVentaPDF = async (req, res) => {
 
     doc.text("TOTAL:", colLeft, totalY);
 
-    doc.text(formatearMoneda(venta.total), colSub, totalY, {
-      width: 50,
+    // doc.text(formatearMoneda(venta.total), colSub, totalY, {
+    //   width: 50,
+    //   align: "right",
+    // });
+
+    doc.text(formatearMoneda(venta.total), colSub + 5, totalY, {
+      width: 45,
       align: "right",
     });
 
@@ -723,12 +734,24 @@ export const descargarVentaPDF = async (req, res) => {
     drawSeparator();
 
     /* =============================
-       FOOTER
-    ============================== */
+   FOOTER
+============================= */
 
-    textCenter(`Imp: ${formatearFechaCortaBO(new Date())}`, 7);
-    doc.moveDown(0.3);
-    textCenter("Gracias por su compra", 8);
+    doc.moveDown(0.8);
+
+    doc.font("Helvetica").fontSize(7);
+
+    doc.text(`Imp: ${formatearFechaCortaBO(new Date())}`, MARGIN, doc.y, {
+      width: CONTENT_WIDTH,
+      align: "center",
+    });
+
+    doc.moveDown(0.4);
+
+    doc.text("Gracias por su compra", MARGIN, doc.y, {
+      width: CONTENT_WIDTH,
+      align: "center",
+    });
 
     doc.end();
   } catch (error) {
