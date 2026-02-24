@@ -168,46 +168,41 @@ export const obtenerDashboard = async (req, res) => {
     /* =====================================================
        RANGO HOY BOLIVIA (UTC-4 REAL)
     ====================================================== */
+    // Hora actual real
+const ahora = new Date()
 
-    const ahora = new Date();
+// Ajustamos a Bolivia restando 4 horas
+const boliviaNow = new Date(ahora.getTime() - (4 * 60 * 60 * 1000))
 
-    const boliviaNow = new Date(
-      ahora.toLocaleString("en-US", { timeZone: "America/La_Paz" }),
-    );
+// Inicio del día Bolivia
+const inicioBolivia = new Date(
+  boliviaNow.getFullYear(),
+  boliviaNow.getMonth(),
+  boliviaNow.getDate(),
+  0, 0, 0
+)
 
-    const inicioBolivia = new Date(
-      boliviaNow.getFullYear(),
-      boliviaNow.getMonth(),
-      boliviaNow.getDate(),
-      0,
-      0,
-      0,
-    );
+// Fin del día Bolivia
+const finBolivia = new Date(
+  boliviaNow.getFullYear(),
+  boliviaNow.getMonth(),
+  boliviaNow.getDate() + 1,
+  0, 0, 0
+)
 
-    const finBolivia = new Date(
-      boliviaNow.getFullYear(),
-      boliviaNow.getMonth(),
-      boliviaNow.getDate() + 1,
-      0,
-      0,
-      0,
-    );
+// Convertimos esos valores a UTC sumando 4 horas
+const inicioUTC = new Date(inicioBolivia.getTime() + (4 * 60 * 60 * 1000))
+const finUTC = new Date(finBolivia.getTime() + (4 * 60 * 60 * 1000))
 
-    const inicioUTC = new Date(
-      inicioBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
-    );
+// Formateo SQL limpio
+const formatSQLDate = (date) =>
+  date.toISOString().slice(0, 19).replace("T", " ")
 
-    const finUTC = new Date(
-      finBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
-    );
+const inicioSQL = formatSQLDate(inicioUTC)
+const finSQL = formatSQLDate(finUTC)
 
-    /* ---------------*/
-    const formatSQLDate = (date) => {
-      return date.toISOString().slice(0, 19).replace("T", " ");
-    };
-
-    const inicioSQL = formatSQLDate(inicioUTC);
-    const finSQL = formatSQLDate(finUTC);
+console.log("Inicio SQL:", inicioSQL)
+console.log("Fin SQL:", finSQL)
 
     /* =====================================================
        RANGO MES ACTUAL BOLIVIA
