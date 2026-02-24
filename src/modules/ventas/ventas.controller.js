@@ -503,210 +503,9 @@ export const listarVentas = async (req, res) => {
   }
 };
 
-export const descargarVentaPDFf = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    /* =============================
-       1️⃣ CABECERA VENTA
-    ============================== */
-
-    const [[venta]] = await pool.query(
-      `
-      SELECT 
-        v.codigo,
-        v.created_at,
-        v.total,
-        v.saldo,
-        v.tipo_pago,
-        v.estado,
-        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
-      FROM ventas v
-      LEFT JOIN clientes c ON c.id = v.cliente_id
-      WHERE v.id = ?
-      `,
-      [id],
-    );
-
-    if (!venta) {
-      return res.status(404).json({ message: "Venta no encontrada" });
-    }
-
-    /* =============================
-       2️⃣ DETALLE VENTA
-    ============================== */
-
-    const [detalle] = await pool.query(
-      `
-  SELECT 
-    d.cantidad,
-    d.precio_unitario,
-    d.precio_subtotal,
-
-    TRIM(
-      CONCAT_WS(' ',
-        NULLIF(m.nombre, ''),
-        p.nombre,
-        NULLIF(p.descripcion, '')
-      )
-    ) AS producto_label
-
-  FROM venta_detalle d
-  JOIN productos p ON p.id = d.producto_id
-  LEFT JOIN marcas m ON m.id = p.marca_id
-  WHERE d.venta_id = ?
-  `,
-      [id],
-    );
-
-    /* =============================
-       CONFIG PDF
-    ============================== */
-
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename=venta-${venta.codigo}.pdf`,
-    );
-
-    const doc = new PDFDocument({ margin: 50 });
-    doc.pipe(res);
-
-    /* =============================
-       ENCABEZADO EMPRESA
-    ============================== */
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(22)
-      .text("TIENDA 3B", { align: "center" });
-
-    doc
-      .font("Helvetica")
-      .fontSize(12)
-      .text("VallesCruceños", { align: "center" });
-
-    doc.moveDown(0.5);
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-    doc.moveDown();
-
-    /* =============================
-       TITULO
-    ============================== */
-
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(16)
-      .text("RECIBO DE VENTA", { align: "center" });
-
-    doc.moveDown();
-
-    /* =============================
-       DATOS GENERALES
-    ============================== */
-
-    doc.font("Helvetica").fontSize(11);
-
-    doc.text(`Código: ${venta.codigo}`);
-    doc.text(`Fecha: ${formatearFechaHoraBO(venta.created_at)}`);
-    doc.text(`Cliente: ${venta.cliente}`);
-    doc.text(`Tipo pago: ${venta.tipo_pago}`);
-
-    doc.moveDown();
-
-    /* =============================
-       TABLA DETALLE
-    ============================== */
-
-    const startX = 50;
-    let y = doc.y;
-
-    const colNro = startX;
-    const colDesc = 80;
-    const colCant = 330;
-    const colPrecio = 380;
-    const colSub = 460;
-
-    doc.font("Helvetica-Bold").fontSize(10);
-
-    doc.text("#", colNro, y);
-    doc.text("Producto", colDesc, y);
-    doc.text("Cant.", colCant, y);
-    doc.text("Precio", colPrecio, y);
-    doc.text("Subtotal", colSub, y);
-
-    y += 15;
-    doc
-      .moveTo(50, y - 5)
-      .lineTo(545, y - 5)
-      .stroke();
-
-    doc.font("Helvetica").fontSize(10);
-
-    detalle.forEach((item, index) => {
-      doc.text(index + 1, colNro, y);
-      doc.text(item.nombre, colDesc, y, { width: 230 });
-      doc.text(item.cantidad.toString(), colCant, y);
-      doc.text(formatearMoneda(item.precio_unitario), colPrecio, y);
-      doc.text(formatearMoneda(item.precio_subtotal), colSub, y);
-      y += 18;
-    });
-
-    y += 10;
-    doc.moveTo(300, y).lineTo(545, y).stroke();
-    y += 15;
-
-    /* =============================
-       TOTALES
-    ============================== */
-
-    doc.font("Helvetica-Bold").fontSize(12);
-
-    doc.text(`TOTAL: ${formatearMoneda(venta.total)}`, 350, y, {
-      align: "right",
-      width: 195,
-    });
-
-    y += 18;
-
-    if (Number(venta.saldo) > 0) {
-      doc.text(`SALDO PENDIENTE: ${formatearMoneda(venta.saldo)}`, 350, y, {
-        align: "right",
-        width: 195,
-      });
-    }
-
-    doc.moveDown(3);
-
-    /* =============================
-       PIE
-    ============================== */
-
-    const fechaImpresion = formatearFechaHoraBO(new Date());
-
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .text(`Impreso el: ${fechaImpresion} (UTC-4)`, {
-        align: "right",
-      });
-
-    doc.moveDown();
-
-    doc.fontSize(9).text("Documento generado electrónicamente", {
-      align: "center",
-    });
-
-    doc.end();
-  } catch (error) {
-    console.error("ERROR PDF VENTA:", error);
-    res.status(500).json({ message: "Error al generar PDF" });
-  }
-};
-
-/* =========================================
-   TICKET 80MM
-========================================= */
+/* =============================
+   DESCARGAR TICKET 80MM
+============================= */
 export const descargarVentaPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -738,13 +537,13 @@ export const descargarVentaPDF = async (req, res) => {
     /* =============================
        2️⃣ DETALLE CON LABEL
     ============================== */
+
     const [detalle] = await pool.query(
       `
       SELECT 
         d.cantidad,
         d.precio_unitario,
         d.precio_subtotal,
-
         TRIM(
           CONCAT_WS(' ',
             NULLIF(m.nombre, ''),
@@ -752,7 +551,6 @@ export const descargarVentaPDF = async (req, res) => {
             NULLIF(p.descripcion, '')
           )
         ) AS producto_label
-
       FROM venta_detalle d
       JOIN productos p ON p.id = d.producto_id
       LEFT JOIN marcas m ON m.id = p.marca_id
@@ -762,9 +560,17 @@ export const descargarVentaPDF = async (req, res) => {
     );
 
     /* =============================
-       CONFIG TICKET 80MM
-       80mm ≈ 226 puntos
+       CONFIG ALTURA DINÁMICA
     ============================== */
+
+    const TICKET_WIDTH = 226;
+    const MARGIN = 10;
+
+    const BASE_HEIGHT = 580; // altura estándar
+    const ITEM_HEIGHT = 26; // crecimiento por item
+
+    const dynamicHeight = BASE_HEIGHT + detalle.length * ITEM_HEIGHT;
+    const FINAL_HEIGHT = Math.max(BASE_HEIGHT, dynamicHeight);
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -773,101 +579,121 @@ export const descargarVentaPDF = async (req, res) => {
     );
 
     const doc = new PDFDocument({
-      size: [226, 2000], // altura grande para que no corte
-      margin: 10,
+      size: [TICKET_WIDTH, FINAL_HEIGHT],
+      margin: MARGIN,
     });
 
     doc.pipe(res);
 
-    const center = { align: "center" };
+    const CONTENT_WIDTH = TICKET_WIDTH - MARGIN * 2;
+    const colLeft = MARGIN;
+    const colPrecio = 110;
+    const colSub = 165;
+
+    doc.lineWidth(0.5);
+
+    /* =============================
+       HELPERS
+    ============================== */
+
+    const drawSeparator = (bold = false) => {
+      if (bold) doc.lineWidth(1);
+
+      doc
+        .moveTo(MARGIN, doc.y)
+        .lineTo(TICKET_WIDTH - MARGIN, doc.y)
+        .stroke();
+
+      doc.moveDown(0.6);
+
+      if (bold) doc.lineWidth(0.5);
+    };
+
+    const textCenter = (text, size = 8, bold = false) => {
+      doc
+        .font(bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(size)
+        .text(text, {
+          width: CONTENT_WIDTH,
+          align: "center",
+        });
+    };
+
+    const textLeft = (text, size = 8, bold = false) => {
+      doc
+        .font(bold ? "Helvetica-Bold" : "Helvetica")
+        .fontSize(size)
+        .text(text, colLeft, doc.y, {
+          width: CONTENT_WIDTH,
+        });
+    };
+
+    const textPriceLine = (cantidad, precio, subtotal) => {
+      const lineY = doc.y;
+
+      doc.font("Helvetica").fontSize(8);
+
+      doc.text(`${cantidad} x`, colLeft, lineY);
+
+      doc.text(precio, colPrecio, lineY, {
+        width: 50,
+        align: "right",
+      });
+
+      doc.text(subtotal, colSub, lineY, {
+        width: 50,
+        align: "right",
+      });
+
+      doc.y = lineY + 14;
+    };
 
     /* =============================
        HEADER
     ============================== */
 
-    doc.font("Helvetica-Bold").fontSize(12).text("TIENDA 3B", center);
-    doc.font("Helvetica").fontSize(9).text("Valles Cruceños", center);
-
-    doc.moveDown(0.5);
-    doc.fontSize(8).text("--------------------------------", center);
+    textCenter("TIENDA 3B", 12, true);
+    textCenter("Valles Cruceños", 9);
+    doc.moveDown(0.3);
+    drawSeparator();
 
     /* =============================
        DATOS VENTA
     ============================== */
 
-    doc.font("Helvetica").fontSize(8);
+    textLeft(`Venta: ${venta.codigo}`);
+    textLeft(`Fecha: ${formatearFechaCortaBO(venta.created_at)}`);
+    textLeft(`Cliente: ${venta.cliente}`);
+    textLeft(`Pago: ${venta.tipo_pago}`);
 
-    doc.text(`Venta: ${venta.codigo}`);
-    doc.text(`Fecha: ${formatearFechaCortaBO(venta.created_at)}`);
-    doc.text(`Cliente: ${venta.cliente}`);
-    doc.text(`Pago: ${venta.tipo_pago}`);
-
-    doc.text("--------------------------------");
+    doc.moveDown(0.3);
+    drawSeparator();
 
     /* =============================
-   CONFIGURACIÓN COLUMNAS 80MM
-============================= */
-
-    const colLeft = 10;
-    const colPrecio = 95;
-    const colSub = 155;
-    const lineWidth = 206; // ancho útil (226 - márgenes)
+       DETALLE PRODUCTOS
+    ============================== */
 
     let contador = 1;
 
-    /* =============================
-   DETALLE PRODUCTOS LIMPIO
-============================= */
-
     detalle.forEach((item) => {
-      // #1 Nombre producto (multiline controlado)
-      doc.font("Helvetica-Bold").fontSize(8);
+      textLeft(`#${contador} ${item.producto_label}`, 8, true);
 
-      const nombreInicioY = doc.y;
+      doc.moveDown(0.2);
 
-      doc.text(`#${contador} ${item.producto_label}`, colLeft, nombreInicioY, {
-        width: lineWidth,
-      });
-
-      doc.moveDown(0.3);
-
-      // Línea de cantidades alineada
-      const lineY = doc.y;
-
-      doc.font("Helvetica").fontSize(8);
-
-      // Cantidad x
-      doc.text(`${item.cantidad} x`, colLeft, lineY);
-
-      // Precio unitario
-      doc.text(formatearMoneda(item.precio_unitario), colPrecio, lineY, {
-        width: 50,
-        align: "right",
-      });
-
-      // Subtotal
-      doc.text(formatearMoneda(item.precio_subtotal), colSub, lineY, {
-        width: 50,
-        align: "right",
-      });
-
-      doc.moveDown(1); // espacio real entre productos
+      textPriceLine(
+        item.cantidad,
+        formatearMoneda(item.precio_unitario),
+        formatearMoneda(item.precio_subtotal),
+      );
 
       contador++;
     });
 
     /* =============================
-   LINEA SEPARADORA
-============================= */
+       TOTAL
+    ============================== */
 
-    doc.moveDown(0.5);
-    doc.fontSize(8).text("-".repeat(32), { align: "center" });
-
-    /* =============================
-   TOTAL PERFECTAMENTE ALINEADO
-============================= */
-
-    doc.moveDown(0.5);
+    drawSeparator(true);
 
     const totalY = doc.y;
 
@@ -882,6 +708,7 @@ export const descargarVentaPDF = async (req, res) => {
 
     if (Number(venta.saldo) > 0) {
       doc.moveDown(0.5);
+
       const saldoY = doc.y;
 
       doc.text("SALDO:", colLeft, saldoY);
@@ -893,19 +720,15 @@ export const descargarVentaPDF = async (req, res) => {
     }
 
     doc.moveDown(1);
-    doc.fontSize(8).text("-".repeat(32), { align: "center" });
+    drawSeparator();
 
     /* =============================
        FOOTER
     ============================== */
 
-    const fechaImpresion = formatearFechaCortaBO(new Date());
-
-    doc.font("Helvetica").fontSize(7);
-
-    doc.text(`Imp: ${fechaImpresion}`, center);
-    doc.moveDown(0.5);
-    doc.text("Gracias por su compra", center);
+    textCenter(`Imp: ${formatearFechaCortaBO(new Date())}`, 7);
+    doc.moveDown(0.3);
+    textCenter("Gracias por su compra", 8);
 
     doc.end();
   } catch (error) {
