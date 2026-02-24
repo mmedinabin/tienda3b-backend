@@ -805,50 +805,78 @@ export const descargarVentaPDF = async (req, res) => {
     doc.text("--------------------------------");
 
     /* =============================
-   DETALLE PRODUCTOS FORMATO PRO
-============================== */
+   CONFIGURACIÓN COLUMNAS 80MM
+============================= */
+
+    const colLeft = 10;
+    const colPrecio = 95;
+    const colSub = 155;
+    const lineWidth = 206; // ancho útil (226 - márgenes)
 
     let contador = 1;
 
+    /* =============================
+   DETALLE PRODUCTOS LIMPIO
+============================= */
+
     detalle.forEach((item) => {
-      // Número + nombre producto
+      // #1 Nombre producto (multiline controlado)
       doc.font("Helvetica-Bold").fontSize(8);
-      doc.text(`#${contador} ${item.producto_label}`, {
-        width: 200,
+
+      const nombreInicioY = doc.y;
+
+      doc.text(`#${contador} ${item.producto_label}`, colLeft, nombreInicioY, {
+        width: lineWidth,
       });
 
-      doc.moveDown(0.2);
+      doc.moveDown(0.3);
 
-      // Columnas alineadas manualmente
-      const colCant = 10;
-      const colPrecio = 80;
-      const colSub = 150;
+      // Línea de cantidades alineada
+      const lineY = doc.y;
 
       doc.font("Helvetica").fontSize(8);
 
-      doc.text(`${item.cantidad} x`, colCant, doc.y);
-      doc.text(formatearMoneda(item.precio_unitario), colPrecio, doc.y);
-      doc.text(formatearMoneda(item.precio_subtotal), colSub, doc.y);
+      // Cantidad x
+      doc.text(`${item.cantidad} x`, colLeft, lineY);
 
-      doc.moveDown(1);
+      // Precio unitario
+      doc.text(formatearMoneda(item.precio_unitario), colPrecio, lineY, {
+        width: 50,
+        align: "right",
+      });
+
+      // Subtotal
+      doc.text(formatearMoneda(item.precio_subtotal), colSub, lineY, {
+        width: 50,
+        align: "right",
+      });
+
+      doc.moveDown(1); // espacio real entre productos
 
       contador++;
     });
 
+    /* =============================
+   LINEA SEPARADORA
+============================= */
+
     doc.moveDown(0.5);
-    doc.text("--------------------------------", { align: "center" });
+    doc.fontSize(8).text("-".repeat(32), { align: "center" });
 
     /* =============================
-   TOTALES BIEN ALINEADOS
-============================== */
+   TOTAL PERFECTAMENTE ALINEADO
+============================= */
 
-    doc.font("Helvetica-Bold").fontSize(9);
+    doc.moveDown(0.5);
 
     const totalY = doc.y;
 
-    doc.text("TOTAL:", 10, totalY);
-    doc.text(formatearMoneda(venta.total), 120, totalY, {
-      width: 90,
+    doc.font("Helvetica-Bold").fontSize(9);
+
+    doc.text("TOTAL:", colLeft, totalY);
+
+    doc.text(formatearMoneda(venta.total), colSub, totalY, {
+      width: 50,
       align: "right",
     });
 
@@ -856,15 +884,16 @@ export const descargarVentaPDF = async (req, res) => {
       doc.moveDown(0.5);
       const saldoY = doc.y;
 
-      doc.text("SALDO:", 10, saldoY);
-      doc.text(formatearMoneda(venta.saldo), 120, saldoY, {
-        width: 90,
+      doc.text("SALDO:", colLeft, saldoY);
+
+      doc.text(formatearMoneda(venta.saldo), colSub, saldoY, {
+        width: 50,
         align: "right",
       });
     }
 
     doc.moveDown(1);
-    doc.text("--------------------------------", { align: "center" });
+    doc.fontSize(8).text("-".repeat(32), { align: "center" });
 
     /* =============================
        FOOTER
