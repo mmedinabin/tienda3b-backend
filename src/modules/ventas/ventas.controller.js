@@ -9,7 +9,7 @@ const formatearFechaCortaBO = (fechaUTC) => {
   const fecha = new Date(fechaUTC);
 
   const fechaBO = new Date(
-    fecha.toLocaleString("en-US", { timeZone: "America/La_Paz" })
+    fecha.toLocaleString("en-US", { timeZone: "America/La_Paz" }),
   );
 
   const dia = String(fechaBO.getDate()).padStart(2, "0");
@@ -26,7 +26,7 @@ const formatearFechaCortaBO = (fechaUTC) => {
    FORMATO MONEDA
 ========================================= */
 const formatearMoneda = (valor) => {
-  return Number(valor).toFixed(2);
+  return `Bs ${Number(valor).toFixed(2)}`;
 };
 
 export const crearVenta = async (req, res) => {
@@ -728,7 +728,7 @@ export const descargarVentaPDF = async (req, res) => {
       LEFT JOIN clientes c ON c.id = v.cliente_id
       WHERE v.id = ?
       `,
-      [id]
+      [id],
     );
 
     if (!venta) {
@@ -738,7 +738,6 @@ export const descargarVentaPDF = async (req, res) => {
     /* =============================
        2️⃣ DETALLE CON LABEL
     ============================== */
-
     const [detalle] = await pool.query(
       `
       SELECT 
@@ -759,7 +758,7 @@ export const descargarVentaPDF = async (req, res) => {
       LEFT JOIN marcas m ON m.id = p.marca_id
       WHERE d.venta_id = ?
       `,
-      [id]
+      [id],
     );
 
     /* =============================
@@ -770,7 +769,7 @@ export const descargarVentaPDF = async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename=ticket-${venta.codigo}.pdf`
+      `inline; filename=ticket-${venta.codigo}.pdf`,
     );
 
     const doc = new PDFDocument({
@@ -806,50 +805,66 @@ export const descargarVentaPDF = async (req, res) => {
     doc.text("--------------------------------");
 
     /* =============================
-       DETALLE PRODUCTOS
-    ============================== */
+   DETALLE PRODUCTOS FORMATO PRO
+============================== */
+
+    let contador = 1;
 
     detalle.forEach((item) => {
-      // Nombre producto (puede ocupar varias líneas)
-      doc.font("Helvetica-Bold").text(item.producto_label, {
+      // Número + nombre producto
+      doc.font("Helvetica-Bold").fontSize(8);
+      doc.text(`#${contador} ${item.producto_label}`, {
         width: 200,
       });
 
-      // Línea cantidad x precio    subtotal
-      doc.font("Helvetica");
+      doc.moveDown(0.2);
 
-      doc.text(
-        `${item.cantidad} x ${formatearMoneda(
-          item.precio_unitario
-        )}     ${formatearMoneda(item.precio_subtotal)}`,
-        {
-          align: "right",
-        }
-      );
+      // Columnas alineadas manualmente
+      const colCant = 10;
+      const colPrecio = 80;
+      const colSub = 150;
 
-      doc.moveDown(0.4);
+      doc.font("Helvetica").fontSize(8);
+
+      doc.text(`${item.cantidad} x`, colCant, doc.y);
+      doc.text(formatearMoneda(item.precio_unitario), colPrecio, doc.y);
+      doc.text(formatearMoneda(item.precio_subtotal), colSub, doc.y);
+
+      doc.moveDown(1);
+
+      contador++;
     });
 
-    doc.text("--------------------------------");
+    doc.moveDown(0.5);
+    doc.text("--------------------------------", { align: "center" });
 
     /* =============================
-       TOTALES
-    ============================== */
+   TOTALES BIEN ALINEADOS
+============================== */
 
-    doc.font("Helvetica-Bold");
+    doc.font("Helvetica-Bold").fontSize(9);
 
-    doc.text(`TOTAL: ${formatearMoneda(venta.total)}`, {
+    const totalY = doc.y;
+
+    doc.text("TOTAL:", 10, totalY);
+    doc.text(formatearMoneda(venta.total), 120, totalY, {
+      width: 90,
       align: "right",
     });
 
     if (Number(venta.saldo) > 0) {
-      doc.text(`SALDO: ${formatearMoneda(venta.saldo)}`, {
+      doc.moveDown(0.5);
+      const saldoY = doc.y;
+
+      doc.text("SALDO:", 10, saldoY);
+      doc.text(formatearMoneda(venta.saldo), 120, saldoY, {
+        width: 90,
         align: "right",
       });
     }
 
-    doc.moveDown();
-    doc.text("--------------------------------", center);
+    doc.moveDown(1);
+    doc.text("--------------------------------", { align: "center" });
 
     /* =============================
        FOOTER
