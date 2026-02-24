@@ -169,44 +169,51 @@ export const obtenerDashboard = async (req, res) => {
        RANGO HOY BOLIVIA (UTC-4 REAL)
     ====================================================== */
     // Hora actual real
-const ahora = new Date()
+    const ahora = new Date();
 
-// Ajustamos a Bolivia restando 4 horas
-const boliviaNow = new Date(ahora.getTime() - (4 * 60 * 60 * 1000))
+    // Ajustamos a Bolivia restando 4 horas
+    const boliviaNow = new Date(ahora.getTime() - 4 * 60 * 60 * 1000);
 
-// Inicio del día Bolivia
-const inicioBolivia = new Date(
-  boliviaNow.getFullYear(),
-  boliviaNow.getMonth(),
-  boliviaNow.getDate(),
-  0, 0, 0
-)
+    // Inicio del día Bolivia
+    const inicioBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate(),
+      0,
+      0,
+      0,
+    );
 
-// Fin del día Bolivia
-const finBolivia = new Date(
-  boliviaNow.getFullYear(),
-  boliviaNow.getMonth(),
-  boliviaNow.getDate() + 1,
-  0, 0, 0
-)
+    // Fin del día Bolivia
+    const finBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate() + 1,
+      0,
+      0,
+      0,
+    );
 
-// Convertimos esos valores a UTC sumando 4 horas
-const inicioUTC = new Date(inicioBolivia.getTime() + (4 * 60 * 60 * 1000))
-const finUTC = new Date(finBolivia.getTime() + (4 * 60 * 60 * 1000))
+    // Convertimos esos valores a UTC sumando 4 horas
+    const inicioUTC = new Date(inicioBolivia.getTime() + 4 * 60 * 60 * 1000);
+    const finUTC = new Date(finBolivia.getTime() + 4 * 60 * 60 * 1000);
 
-// Formateo SQL limpio
-const formatSQLDate = (date) =>
-  date.toISOString().slice(0, 19).replace("T", " ")
+    // Formateo SQL limpio
+    const formatSQLDate = (date) =>
+      date.toISOString().slice(0, 19).replace("T", " ");
 
-const inicioSQL = formatSQLDate(inicioUTC)
-const finSQL = formatSQLDate(finUTC)
+    const inicioSQL = formatSQLDate(inicioUTC);
+    const finSQL = formatSQLDate(finUTC);
 
-console.log("Inicio SQL:", inicioSQL)
-console.log("Fin SQL:", finSQL)
+    console.log("Inicio SQL:", inicioSQL);
+    console.log("Fin SQL:", finSQL);
 
     /* =====================================================
        RANGO MES ACTUAL BOLIVIA
     ====================================================== */
+    /* =====================================================
+   RANGO MES ACTUAL BOLIVIA
+===================================================== */
 
     const inicioMesBolivia = new Date(
       boliviaNow.getFullYear(),
@@ -226,17 +233,21 @@ console.log("Fin SQL:", finSQL)
       0,
     );
 
+    // Convertimos a UTC sumando 4 horas
     const inicioMesUTC = new Date(
-      inicioMesBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+      inicioMesBolivia.getTime() + 4 * 60 * 60 * 1000,
     );
+    const finMesUTC = new Date(finMesBolivia.getTime() + 4 * 60 * 60 * 1000);
 
-    const finMesUTC = new Date(
-      finMesBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
-    );
+    const inicioMesSQL = formatSQLDate(inicioMesUTC);
+    const finMesSQL = formatSQLDate(finMesUTC);
 
     /* =====================================================
        RANGO MES ANTERIOR
     ====================================================== */
+    /* =====================================================
+   RANGO MES ANTERIOR
+===================================================== */
 
     const inicioMesAnteriorBolivia = new Date(
       boliviaNow.getFullYear(),
@@ -257,12 +268,15 @@ console.log("Fin SQL:", finSQL)
     );
 
     const inicioMesAnteriorUTC = new Date(
-      inicioMesAnteriorBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+      inicioMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000,
     );
 
     const finMesAnteriorUTC = new Date(
-      finMesAnteriorBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+      finMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000,
     );
+
+    const inicioMesAnteriorSQL = formatSQLDate(inicioMesAnteriorUTC);
+    const finMesAnteriorSQL = formatSQLDate(finMesAnteriorUTC);
 
     /* =====================================================
        FUNCION PARA PARAMETROS
@@ -319,7 +333,7 @@ console.log("Fin SQL:", finSQL)
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioMesUTC, finMesUTC]),
+      buildParams([inicioMesSQL, finMesSQL]),
     );
 
     /* =====================================================
@@ -335,7 +349,7 @@ console.log("Fin SQL:", finSQL)
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioMesAnteriorUTC, finMesAnteriorUTC]),
+      buildParams([inicioMesAnteriorSQL, finMesAnteriorSQL]),
     );
 
     /* =====================================================
@@ -354,18 +368,6 @@ console.log("Fin SQL:", finSQL)
     /* =====================================================
        TICKETS HOY
     ====================================================== */
-
-    // const [[ticketsHoyRes]] = await pool.query(
-    //   `
-    //   SELECT COUNT(*) AS tickets_hoy
-    //   FROM ventas
-    //   WHERE estado = 'ACTIVA'
-    //   ${filtroSucursal}
-    //   AND created_at >= ?
-    //   AND created_at < ?
-    //   `,
-    //   buildParams([inicioUTC, finUTC]),
-    // );
     const [[ticketsHoyRes]] = await pool.query(
       `
   SELECT COUNT(*) AS tickets_hoy
