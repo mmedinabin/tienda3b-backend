@@ -537,27 +537,55 @@ export const descargarVentaPDF = async (req, res) => {
     /* =============================
        2️⃣ DETALLE CON LABEL
     ============================== */
-
     const [detalle] = await pool.query(
       `
-      SELECT 
-        d.cantidad,
-        d.precio_unitario,
-        d.precio_subtotal,
-        TRIM(
-          CONCAT_WS(' ',
-            NULLIF(m.nombre, ''),
+  SELECT 
+    d.cantidad,
+    d.precio_unitario,
+    d.precio_subtotal,
+
+    TRIM(
+      CONCAT_WS(' ',
+        SUBSTRING_INDEX(p.nombre, ' ', 1),
+        NULLIF(m.nombre, ''),
+        NULLIF(
+          SUBSTRING(
             p.nombre,
-            NULLIF(p.descripcion, '')
-          )
-        ) AS producto_label
-      FROM venta_detalle d
-      JOIN productos p ON p.id = d.producto_id
-      LEFT JOIN marcas m ON m.id = p.marca_id
-      WHERE d.venta_id = ?
-      `,
+            LENGTH(SUBSTRING_INDEX(p.nombre, ' ', 1)) + 2
+          ),
+          ''
+        ),
+        NULLIF(p.descripcion, '')
+      )
+    ) AS producto_label
+
+  FROM venta_detalle d
+  JOIN productos p ON p.id = d.producto_id
+  LEFT JOIN marcas m ON m.id = p.marca_id
+  WHERE d.venta_id = ?
+  `,
       [id],
     );
+    // const [detalle] = await pool.query(
+    //   `
+    //   SELECT
+    //     d.cantidad,
+    //     d.precio_unitario,
+    //     d.precio_subtotal,
+    //     TRIM(
+    //       CONCAT_WS(' ',
+    //         NULLIF(m.nombre, ''),
+    //         p.nombre,
+    //         NULLIF(p.descripcion, '')
+    //       )
+    //     ) AS producto_label
+    //   FROM venta_detalle d
+    //   JOIN productos p ON p.id = d.producto_id
+    //   LEFT JOIN marcas m ON m.id = p.marca_id
+    //   WHERE d.venta_id = ?
+    //   `,
+    //   [id],
+    // );
 
     /* =============================
        CONFIG ALTURA DINÁMICA
