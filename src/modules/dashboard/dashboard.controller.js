@@ -209,8 +209,46 @@ export const obtenerDashboard = async (req, res) => {
     console.log("Fin SQL:", finSQL);
 
     /* =====================================================
-       RANGO MES ACTUAL BOLIVIA
-    ====================================================== */
+   RANGO SEMANA ACTUAL (LUNES A HOY) BOLIVIA
+===================================================== */
+
+    // Día actual Bolivia (0=domingo, 1=lunes...)
+    let day = boliviaNow.getDay();
+
+    // Ajustamos para que lunes sea inicio (1)
+    let diffToMonday = day === 0 ? 6 : day - 1;
+
+    // Inicio de semana Bolivia (lunes 00:00)
+    const inicioSemanaBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate() - diffToMonday,
+      0,
+      0,
+      0,
+    );
+
+    // Fin = ahora mismo
+    const finSemanaBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate() + 1,
+      0,
+      0,
+      0,
+    );
+
+    // Convertimos a UTC sumando 4h
+    const inicioSemanaUTC = new Date(
+      inicioSemanaBolivia.getTime() + 4 * 60 * 60 * 1000,
+    );
+    const finSemanaUTC = new Date(
+      finSemanaBolivia.getTime() + 4 * 60 * 60 * 1000,
+    );
+
+    const inicioSemanaSQL = formatSQLDate(inicioSemanaUTC);
+    const finSemanaSQL = formatSQLDate(finSemanaUTC);
+
     /* =====================================================
    RANGO MES ACTUAL BOLIVIA
 ===================================================== */
@@ -318,6 +356,18 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at < ?
       `,
       buildParams([inicioSQL, finSQL]),
+    );
+
+    const [[ventaSemanaRes]] = await pool.query(
+      `
+  SELECT IFNULL(SUM(total),0) AS venta_semana
+  FROM ventas
+  WHERE estado = 'ACTIVA'
+  ${filtroSucursal}
+  AND created_at >= ?
+  AND created_at < ?
+  `,
+      buildParams([inicioSemanaSQL, finSemanaSQL]),
     );
 
     /* =====================================================
@@ -438,9 +488,9 @@ export const obtenerDashboard = async (req, res) => {
 
     res.json({
       ventaHoy: ventaHoyRes.venta_hoy,
+      ventaSemana: ventaSemanaRes.venta_semana,
       utilidadHoy: utilidadHoyRes.utilidad_hoy,
       ventaMes: ventaMesActual,
-      crecimientoMes,
       inventarioValorizado: inventarioRes.inventario_valorizado,
       ticketsHoy: ticketsHoyRes.tickets_hoy,
       productosBajoStock: bajoStockRes.productos_bajo_stock,
