@@ -362,19 +362,21 @@ export const crearVenta = async (req, res) => {
   }
 };
 
+
+
 export const listarVentas = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
-  if (sucursalId === null || sucursalId === undefined) {
-    return res.status(400).json({
-      message: "Debe seleccionar una sucursal para ver las ventas",
-    });
-  }
+if (sucursalId === null || sucursalId === undefined) {
+  return res.status(400).json({
+    message: "Debe seleccionar una sucursal para ver las ventas",
+  });
+}
 
   try {
-    /* ======================================
-       1️⃣ Traer últimas 25 ventas
-    ======================================= */
+    /* ==============================
+       1️⃣ Últimas 25 ventas
+    =============================== */
 
     const [ventas] = await pool.query(
       `
@@ -384,7 +386,6 @@ export const listarVentas = async (req, res) => {
         DATE_SUB(v.created_at, INTERVAL 4 HOUR) AS fecha,
         IFNULL(c.nombre, 'SIN NOMBRE') AS cliente,
         v.cliente_id,
-        CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal,
         v.tipo_pago,
         v.total,
         v.saldo,
@@ -392,8 +393,6 @@ export const listarVentas = async (req, res) => {
         v.estado_pago
       FROM ventas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
-      INNER JOIN sucursales s ON s.id = v.sucursal_id
-      INNER JOIN ciudades ci ON ci.id = s.ciudad_id
       WHERE v.sucursal_id = ?
       ORDER BY v.id DESC
       LIMIT 25
@@ -405,20 +404,22 @@ export const listarVentas = async (req, res) => {
       return res.json([]);
     }
 
-    /* ======================================
-       2️⃣ Obtener IDs de ventas
-    ======================================= */
+    /* ==============================
+       2️⃣ Obtener IDs
+    =============================== */
 
     const ventaIds = ventas.map((v) => v.id);
 
-    /* ======================================
-       3️⃣ Traer detalles con nombre concatenado
-    ======================================= */
+    /* ==============================
+       3️⃣ Traer detalle correcto
+    =============================== */
+
+    const placeholders = ventaIds.map(() => "?").join(",");
 
     const [detalles] = await pool.query(
       `
       SELECT 
-        dv.venta_id,
+        vd.venta_id,
 
         TRIM(
           CONCAT(
@@ -430,21 +431,21 @@ export const listarVentas = async (req, res) => {
           )
         ) AS producto,
 
-        dv.cantidad,
-        dv.precio_unitario,
-        dv.subtotal
+        vd.cantidad,
+        vd.precio_unitario,
+        vd.precio_subtotal
 
-      FROM detalle_ventas dv
-      INNER JOIN productos p ON p.id = dv.producto_id
+      FROM venta_detalle vd
+      INNER JOIN productos p ON p.id = vd.producto_id
       LEFT JOIN marcas m ON m.id = p.marca_id
-      WHERE dv.venta_id IN (?)
+      WHERE vd.venta_id IN (${placeholders})
       `,
-      [ventaIds],
+      ventaIds,
     );
 
-    /* ======================================
-       4️⃣ Agrupar productos por venta
-    ======================================= */
+    /* ==============================
+       4️⃣ Agrupar
+    =============================== */
 
     const ventasMap = {};
 
@@ -461,7 +462,7 @@ export const listarVentas = async (req, res) => {
           producto: d.producto,
           cantidad: d.cantidad,
           precio_unitario: d.precio_unitario,
-          subtotal: d.subtotal,
+          subtotal: d.precio_subtotal,
         });
       }
     });
