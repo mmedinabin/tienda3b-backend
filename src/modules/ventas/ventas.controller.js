@@ -394,7 +394,7 @@ if (sucursalId === null || sucursalId === undefined) {
       FROM ventas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
       WHERE v.sucursal_id = ?
-      ORDER BY v.id DESC
+      ORDER BY v.created_at DESC
       LIMIT 25
       `,
       [sucursalId],
