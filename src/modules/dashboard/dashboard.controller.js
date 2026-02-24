@@ -201,6 +201,14 @@ export const obtenerDashboard = async (req, res) => {
       finBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
     );
 
+    /* ---------------*/
+    const formatSQLDate = (date) => {
+      return date.toISOString().slice(0, 19).replace("T", " ");
+    };
+
+    const inicioSQL = formatSQLDate(inicioUTC);
+    const finSQL = formatSQLDate(finUTC);
+
     /* =====================================================
        RANGO MES ACTUAL BOLIVIA
     ====================================================== */
@@ -284,7 +292,7 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioUTC, finUTC]),
+      buildParams([inicioSQL, finSQL]),
     );
 
     /* =====================================================
@@ -300,7 +308,7 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioUTC, finUTC]),
+      buildParams([inicioSQL, finSQL]),
     );
 
     /* =====================================================
@@ -352,16 +360,28 @@ export const obtenerDashboard = async (req, res) => {
        TICKETS HOY
     ====================================================== */
 
+    // const [[ticketsHoyRes]] = await pool.query(
+    //   `
+    //   SELECT COUNT(*) AS tickets_hoy
+    //   FROM ventas
+    //   WHERE estado = 'ACTIVA'
+    //   ${filtroSucursal}
+    //   AND created_at >= ?
+    //   AND created_at < ?
+    //   `,
+    //   buildParams([inicioUTC, finUTC]),
+    // );
+
     const [[ticketsHoyRes]] = await pool.query(
       `
-      SELECT COUNT(*) AS tickets_hoy
-      FROM ventas
-      WHERE estado = 'ACTIVA'
-      ${filtroSucursal}
-      AND created_at >= ?
-      AND created_at < ?
-      `,
-      buildParams([inicioUTC, finUTC]),
+  SELECT COUNT(*) AS tickets_hoy
+  FROM ventas
+  WHERE estado = 'ACTIVA'
+  ${filtroSucursal}
+  AND created_at >= ?
+  AND created_at < ?
+  `,
+      buildParams([inicioSQL, finSQL]),
     );
 
     /* =====================================================
