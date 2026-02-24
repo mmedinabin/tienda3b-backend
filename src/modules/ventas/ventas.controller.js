@@ -467,7 +467,8 @@ if (sucursalId === null || sucursalId === undefined) {
       }
     });
 
-    const resultado = Object.values(ventasMap);
+    //const resultado = Object.values(ventasMap);
+    const resultado = ventas.map(v => ventasMap[v.id]);
 
     res.json(resultado);
   } catch (error) {
