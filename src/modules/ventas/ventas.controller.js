@@ -362,25 +362,28 @@ export const crearVenta = async (req, res) => {
   }
 };
 
-
 export const listarVentas = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
   if (sucursalId === null || sucursalId === undefined) {
     return res.status(400).json({
-      message:
-        "Debe seleccionar una sucursal específica para registrar la compra",
+      message: "Debe seleccionar una sucursal para ver las ventas",
     });
   }
 
   try {
-    const [rows] = await pool.query(
+    /* ======================================
+       1️⃣ Traer últimas 25 ventas
+    ======================================= */
+
+    const [ventas] = await pool.query(
       `
       SELECT 
         v.id,
         v.codigo,
         DATE_SUB(v.created_at, INTERVAL 4 HOUR) AS fecha,
-        IFNULL(c.nombre, '-') AS cliente,
+        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente,
+        v.cliente_id,
         CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal,
         v.tipo_pago,
         v.total,
@@ -395,10 +398,77 @@ export const listarVentas = async (req, res) => {
       ORDER BY v.id DESC
       LIMIT 25
       `,
-      [sucursalId]
+      [sucursalId],
     );
 
-    res.json(rows);
+    if (ventas.length === 0) {
+      return res.json([]);
+    }
+
+    /* ======================================
+       2️⃣ Obtener IDs de ventas
+    ======================================= */
+
+    const ventaIds = ventas.map((v) => v.id);
+
+    /* ======================================
+       3️⃣ Traer detalles con nombre concatenado
+    ======================================= */
+
+    const [detalles] = await pool.query(
+      `
+      SELECT 
+        dv.venta_id,
+
+        TRIM(
+          CONCAT(
+            IFNULL(m.nombre, ''),
+            IF(m.nombre IS NOT NULL AND m.nombre <> '', ' ', ''),
+            p.nombre,
+            IF(p.descripcion IS NOT NULL AND p.descripcion <> '', ' ', ''),
+            IFNULL(p.descripcion, '')
+          )
+        ) AS producto,
+
+        dv.cantidad,
+        dv.precio_unitario,
+        dv.subtotal
+
+      FROM detalle_ventas dv
+      INNER JOIN productos p ON p.id = dv.producto_id
+      LEFT JOIN marcas m ON m.id = p.marca_id
+      WHERE dv.venta_id IN (?)
+      `,
+      [ventaIds],
+    );
+
+    /* ======================================
+       4️⃣ Agrupar productos por venta
+    ======================================= */
+
+    const ventasMap = {};
+
+    ventas.forEach((v) => {
+      ventasMap[v.id] = {
+        ...v,
+        productos: [],
+      };
+    });
+
+    detalles.forEach((d) => {
+      if (ventasMap[d.venta_id]) {
+        ventasMap[d.venta_id].productos.push({
+          producto: d.producto,
+          cantidad: d.cantidad,
+          precio_unitario: d.precio_unitario,
+          subtotal: d.subtotal,
+        });
+      }
+    });
+
+    const resultado = Object.values(ventasMap);
+
+    res.json(resultado);
   } catch (error) {
     console.error("ERROR LISTAR VENTAS:", error);
     res.status(500).json({
@@ -429,7 +499,7 @@ export const descargarVentaPDF = async (req, res) => {
       LEFT JOIN clientes c ON c.id = v.cliente_id
       WHERE v.id = ?
       `,
-      [id]
+      [id],
     );
 
     if (!venta) {
@@ -451,7 +521,7 @@ export const descargarVentaPDF = async (req, res) => {
       JOIN productos p ON p.id = d.producto_id
       WHERE d.venta_id = ?
       `,
-      [id]
+      [id],
     );
 
     /* =============================
@@ -461,7 +531,7 @@ export const descargarVentaPDF = async (req, res) => {
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename=venta-${venta.codigo}.pdf`
+      `inline; filename=venta-${venta.codigo}.pdf`,
     );
 
     const doc = new PDFDocument({ margin: 50 });
@@ -531,7 +601,10 @@ export const descargarVentaPDF = async (req, res) => {
     doc.text("Subtotal", colSub, y);
 
     y += 15;
-    doc.moveTo(50, y - 5).lineTo(545, y - 5).stroke();
+    doc
+      .moveTo(50, y - 5)
+      .lineTo(545, y - 5)
+      .stroke();
 
     doc.font("Helvetica").fontSize(10);
 
