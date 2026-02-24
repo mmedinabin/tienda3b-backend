@@ -371,19 +371,17 @@ export const obtenerDashboard = async (req, res) => {
     //   `,
     //   buildParams([inicioUTC, finUTC]),
     // );
-
     const [[ticketsHoyRes]] = await pool.query(
       `
   SELECT COUNT(*) AS tickets_hoy
   FROM ventas
   WHERE estado = 'ACTIVA'
-  ${filtroSucursal}
+  AND sucursal_id = ?
   AND created_at >= ?
   AND created_at < ?
   `,
-      buildParams([inicioSQL, finSQL]),
+      [sucursalId, inicioSQL, finSQL],
     );
-
     /* =====================================================
        PRODUCTOS BAJO STOCK
     ====================================================== */
