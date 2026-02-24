@@ -383,7 +383,7 @@ if (sucursalId === null || sucursalId === undefined) {
       SELECT 
         v.id,
         v.codigo,
-        DATE_SUB(v.created_at, INTERVAL 4 HOUR) AS fecha,
+        v.created_at AS fecha
         IFNULL(c.nombre, 'SIN NOMBRE') AS cliente,
         v.cliente_id,
         v.tipo_pago,

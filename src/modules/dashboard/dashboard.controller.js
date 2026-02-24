@@ -165,137 +165,173 @@ export const obtenerDashboard = async (req, res) => {
   try {
     const sucursalId = req.sucursalActiva;
 
-    const filtroSucursal = sucursalId == null
-      ? ''
-      : 'AND sucursal_id = ?';
+    const esGlobal = sucursalId == null;
 
-    const params = sucursalId == null ? [] : [sucursalId];
+    const filtroSucursal = esGlobal ? '' : 'AND sucursal_id = ?';
+    const paramsSucursal = esGlobal ? [] : [sucursalId];
 
-    /* ===========================
-       VENTA HOY (Bolivia UTC-4)
-    ============================ */
+    /* ===============================
+       RANGO HOY BOLIVIA (UTC-4)
+       00:00 Bolivia = 04:00 UTC
+    =============================== */
+
+    const rangoHoyInicio = 'CURDATE() + INTERVAL 4 HOUR';
+    const rangoHoyFin = 'CURDATE() + INTERVAL 1 DAY + INTERVAL 4 HOUR';
+
+    /* ===============================
+       RANGO MES ACTUAL (UTC-4)
+    =============================== */
+
+    const rangoMesInicio =
+      "DATE_FORMAT(CURDATE(), '%Y-%m-01') + INTERVAL 4 HOUR";
+
+    const rangoMesFin =
+      "DATE_FORMAT(CURDATE() + INTERVAL 1 MONTH, '%Y-%m-01') + INTERVAL 4 HOUR";
+
+    /* ===============================
+       RANGO MES ANTERIOR (UTC-4)
+    =============================== */
+
+    const rangoMesAnteriorInicio =
+      "DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01') + INTERVAL 4 HOUR";
+
+    const rangoMesAnteriorFin =
+      "DATE_FORMAT(CURDATE(), '%Y-%m-01') + INTERVAL 4 HOUR";
+
+    /* ===============================
+       VENTA HOY
+    =============================== */
+
     const [[ventaHoyRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(total),0) AS venta_hoy
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      AND created_at >= ${rangoHoyInicio}
+      AND created_at < ${rangoHoyFin}
       `,
-      params
+      paramsSucursal
     );
 
-    /* ===========================
+    /* ===============================
        UTILIDAD HOY
-    ============================ */
+    =============================== */
+
     const [[utilidadHoyRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(utilidad_total),0) AS utilidad_hoy
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      AND created_at >= ${rangoHoyInicio}
+      AND created_at < ${rangoHoyFin}
       `,
-      params
+      paramsSucursal
     );
 
-    /* ===========================
+    /* ===============================
        VENTA MES ACTUAL
-    ============================ */
+    =============================== */
+
     const [[ventaMesRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(total),0) AS venta_mes
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND YEAR(CONVERT_TZ(created_at, '+00:00', '-04:00')) = YEAR(CURDATE())
-      AND MONTH(CONVERT_TZ(created_at, '+00:00', '-04:00')) = MONTH(CURDATE())
+      AND created_at >= ${rangoMesInicio}
+      AND created_at < ${rangoMesFin}
       `,
-      params
+      paramsSucursal
     );
 
-    /* ===========================
+    /* ===============================
        VENTA MES ANTERIOR
-    ============================ */
+    =============================== */
+
     const [[ventaMesAnteriorRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(total),0) AS venta_mes_anterior
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND YEAR(CONVERT_TZ(created_at, '+00:00', '-04:00')) =
-          YEAR(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
-      AND MONTH(CONVERT_TZ(created_at, '+00:00', '-04:00')) =
-          MONTH(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
+      AND created_at >= ${rangoMesAnteriorInicio}
+      AND created_at < ${rangoMesAnteriorFin}
       `,
-      params
+      paramsSucursal
     );
 
-    /* ===========================
+    /* ===============================
        INVENTARIO VALORIZADO
-    ============================ */
+    =============================== */
+
     const [[inventarioRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(l.cantidad_actual * l.costo_unitario),0) AS inventario_valorizado
       FROM lotes l
-      ${sucursalId == null ? '' : 'WHERE l.sucursal_id = ? AND l.cantidad_actual > 0'}
+      ${esGlobal ? '' : 'WHERE l.sucursal_id = ? AND l.cantidad_actual > 0'}
       `,
-      sucursalId == null ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId]
     );
 
-    /* ===========================
+    /* ===============================
        TICKETS HOY
-    ============================ */
+    =============================== */
+
     const [[ticketsHoyRes]] = await pool.query(
       `
       SELECT COUNT(*) AS tickets_hoy
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND DATE(CONVERT_TZ(created_at, '+00:00', '-04:00')) = CURDATE()
+      AND created_at >= ${rangoHoyInicio}
+      AND created_at < ${rangoHoyFin}
       `,
-      params
+      paramsSucursal
     );
 
-    /* ===========================
+    /* ===============================
        PRODUCTOS BAJO STOCK
-    ============================ */
+    =============================== */
+
     const [[bajoStockRes]] = await pool.query(
       `
       SELECT COUNT(*) AS productos_bajo_stock
       FROM stock
-      ${sucursalId == null ? '' : 'WHERE sucursal_id = ?'}
-      AND cantidad <= 5
+      ${esGlobal ? '' : 'WHERE sucursal_id = ?'}
+      ${esGlobal ? 'WHERE' : 'AND'} cantidad <= 5
       `,
-      sucursalId == null ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId]
     );
 
-    /* ===========================
+    /* ===============================
        PRODUCTOS ACTIVOS
-    ============================ */
-    const [[productosRes]] = await pool.query(
-      `
+    =============================== */
+
+    const [[productosRes]] = await pool.query(`
       SELECT COUNT(*) AS total_productos
       FROM productos
       WHERE estado = 1
-      `
-    );
+    `);
 
-    /* ===========================
+    /* ===============================
        TOTAL UNIDADES
-    ============================ */
+    =============================== */
+
     const [[unidadesRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(cantidad),0) AS total_unidades
       FROM stock
-      ${sucursalId == null ? '' : 'WHERE sucursal_id = ?'}
+      ${esGlobal ? '' : 'WHERE sucursal_id = ?'}
       `,
-      sucursalId == null ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId]
     );
 
-    /* ===========================
+    /* ===============================
        CRECIMIENTO %
-    ============================ */
+    =============================== */
+
     const ventaMesActual = ventaMesRes.venta_mes;
     const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior;
 
@@ -304,7 +340,13 @@ export const obtenerDashboard = async (req, res) => {
     if (ventaMesAnterior > 0) {
       crecimientoMes =
         ((ventaMesActual - ventaMesAnterior) / ventaMesAnterior) * 100;
+    } else if (ventaMesActual > 0) {
+      crecimientoMes = 100;
     }
+
+    /* ===============================
+       RESPONSE
+    =============================== */
 
     res.json({
       ventaHoy: ventaHoyRes.venta_hoy,
