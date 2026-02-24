@@ -1,14 +1,14 @@
-import pool from '../../db/pool.js'
+import pool from "../../db/pool.js";
 
 export const obtenerDashboardd = async (req, res) => {
   try {
-    const sucursalId = req.sucursalActiva
+    const sucursalId = req.sucursalActiva;
 
     // 🔒 Si está en modo global
     if (!sucursalId) {
       return res.json({
         requiereSeleccionSucursal: true,
-      })
+      });
     }
 
     /* ===========================
@@ -21,8 +21,8 @@ export const obtenerDashboardd = async (req, res) => {
       WHERE sucursal_id = ?
       AND DATE(created_at) = CURDATE()
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        UTILIDAD HOY
@@ -34,8 +34,8 @@ export const obtenerDashboardd = async (req, res) => {
       WHERE sucursal_id = ?
       AND DATE(created_at) = CURDATE()
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        VENTA MES ACTUAL
@@ -48,8 +48,8 @@ export const obtenerDashboardd = async (req, res) => {
       AND YEAR(created_at) = YEAR(CURDATE())
       AND MONTH(created_at) = MONTH(CURDATE())
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        VENTA MES ANTERIOR
@@ -62,8 +62,8 @@ export const obtenerDashboardd = async (req, res) => {
       AND YEAR(created_at) = YEAR(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
       AND MONTH(created_at) = MONTH(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        INVENTARIO VALORIZADO
@@ -75,8 +75,8 @@ export const obtenerDashboardd = async (req, res) => {
       WHERE l.sucursal_id = ?
       AND l.cantidad_actual > 0
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        TICKETS HOY
@@ -88,8 +88,8 @@ export const obtenerDashboardd = async (req, res) => {
       WHERE sucursal_id = ?
       AND DATE(created_at) = CURDATE()
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        PRODUCTOS BAJO STOCK
@@ -101,8 +101,8 @@ export const obtenerDashboardd = async (req, res) => {
       WHERE sucursal_id = ?
       AND cantidad <= 5
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        PRODUCTOS EN CATÁLOGO (SKU)
@@ -112,8 +112,8 @@ export const obtenerDashboardd = async (req, res) => {
       SELECT COUNT(*) AS total_productos
       FROM productos
       WHERE estado = 1
-      `
-    )
+      `,
+    );
 
     /* ===========================
        TOTAL PIEZAS FÍSICAS
@@ -124,20 +124,20 @@ export const obtenerDashboardd = async (req, res) => {
       FROM stock
       WHERE sucursal_id = ?
       `,
-      [sucursalId]
-    )
+      [sucursalId],
+    );
 
     /* ===========================
        CRECIMIENTO MES %
     ============================ */
-    const ventaMesActual = ventaMesRes.venta_mes
-    const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior
+    const ventaMesActual = ventaMesRes.venta_mes;
+    const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior;
 
-    let crecimientoMes = 0
+    let crecimientoMes = 0;
 
     if (ventaMesAnterior > 0) {
       crecimientoMes =
-        ((ventaMesActual - ventaMesAnterior) / ventaMesAnterior) * 100
+        ((ventaMesActual - ventaMesAnterior) / ventaMesAnterior) * 100;
     }
 
     /* ===========================
@@ -153,54 +153,127 @@ export const obtenerDashboardd = async (req, res) => {
       productosBajoStock: bajoStockRes.productos_bajo_stock,
       totalProductos: productosRes.total_productos,
       totalUnidades: unidadesRes.total_unidades,
-    })
-
+    });
   } catch (error) {
-    console.error('Error dashboard:', error)
-    res.status(500).json({ message: 'Error obteniendo dashboard' })
+    console.error("Error dashboard:", error);
+    res.status(500).json({ message: "Error obteniendo dashboard" });
   }
-}
+};
 
 export const obtenerDashboard = async (req, res) => {
   try {
     const sucursalId = req.sucursalActiva;
-
     const esGlobal = sucursalId == null;
 
-    const filtroSucursal = esGlobal ? '' : 'AND sucursal_id = ?';
-    const paramsSucursal = esGlobal ? [] : [sucursalId];
+    /* =====================================================
+       RANGO HOY BOLIVIA (UTC-4 REAL)
+    ====================================================== */
 
-    /* ===============================
-       RANGO HOY BOLIVIA (UTC-4)
-       00:00 Bolivia = 04:00 UTC
-    =============================== */
+    const ahora = new Date();
 
-    const rangoHoyInicio = 'CURDATE() + INTERVAL 4 HOUR';
-    const rangoHoyFin = 'CURDATE() + INTERVAL 1 DAY + INTERVAL 4 HOUR';
+    const boliviaNow = new Date(
+      ahora.toLocaleString("en-US", { timeZone: "America/La_Paz" }),
+    );
 
-    /* ===============================
-       RANGO MES ACTUAL (UTC-4)
-    =============================== */
+    const inicioBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate(),
+      0,
+      0,
+      0,
+    );
 
-    const rangoMesInicio =
-      "DATE_FORMAT(CURDATE(), '%Y-%m-01') + INTERVAL 4 HOUR";
+    const finBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      boliviaNow.getDate() + 1,
+      0,
+      0,
+      0,
+    );
 
-    const rangoMesFin =
-      "DATE_FORMAT(CURDATE() + INTERVAL 1 MONTH, '%Y-%m-01') + INTERVAL 4 HOUR";
+    const inicioUTC = new Date(
+      inicioBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
 
-    /* ===============================
-       RANGO MES ANTERIOR (UTC-4)
-    =============================== */
+    const finUTC = new Date(
+      finBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
 
-    const rangoMesAnteriorInicio =
-      "DATE_FORMAT(CURDATE() - INTERVAL 1 MONTH, '%Y-%m-01') + INTERVAL 4 HOUR";
+    /* =====================================================
+       RANGO MES ACTUAL BOLIVIA
+    ====================================================== */
 
-    const rangoMesAnteriorFin =
-      "DATE_FORMAT(CURDATE(), '%Y-%m-01') + INTERVAL 4 HOUR";
+    const inicioMesBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      1,
+      0,
+      0,
+      0,
+    );
 
-    /* ===============================
+    const finMesBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth() + 1,
+      1,
+      0,
+      0,
+      0,
+    );
+
+    const inicioMesUTC = new Date(
+      inicioMesBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+
+    const finMesUTC = new Date(
+      finMesBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+
+    /* =====================================================
+       RANGO MES ANTERIOR
+    ====================================================== */
+
+    const inicioMesAnteriorBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth() - 1,
+      1,
+      0,
+      0,
+      0,
+    );
+
+    const finMesAnteriorBolivia = new Date(
+      boliviaNow.getFullYear(),
+      boliviaNow.getMonth(),
+      1,
+      0,
+      0,
+      0,
+    );
+
+    const inicioMesAnteriorUTC = new Date(
+      inicioMesAnteriorBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+
+    const finMesAnteriorUTC = new Date(
+      finMesAnteriorBolivia.toLocaleString("en-US", { timeZone: "UTC" }),
+    );
+
+    /* =====================================================
+       FUNCION PARA PARAMETROS
+    ====================================================== */
+
+    const buildParams = (extraParams = []) => {
+      return esGlobal ? [...extraParams] : [sucursalId, ...extraParams];
+    };
+
+    const filtroSucursal = esGlobal ? "" : "AND sucursal_id = ?";
+
+    /* =====================================================
        VENTA HOY
-    =============================== */
+    ====================================================== */
 
     const [[ventaHoyRes]] = await pool.query(
       `
@@ -208,15 +281,15 @@ export const obtenerDashboard = async (req, res) => {
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND created_at >= ${rangoHoyInicio}
-      AND created_at < ${rangoHoyFin}
+      AND created_at >= ?
+      AND created_at < ?
       `,
-      paramsSucursal
+      buildParams([inicioUTC, finUTC]),
     );
 
-    /* ===============================
+    /* =====================================================
        UTILIDAD HOY
-    =============================== */
+    ====================================================== */
 
     const [[utilidadHoyRes]] = await pool.query(
       `
@@ -224,15 +297,15 @@ export const obtenerDashboard = async (req, res) => {
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND created_at >= ${rangoHoyInicio}
-      AND created_at < ${rangoHoyFin}
+      AND created_at >= ?
+      AND created_at < ?
       `,
-      paramsSucursal
+      buildParams([inicioUTC, finUTC]),
     );
 
-    /* ===============================
+    /* =====================================================
        VENTA MES ACTUAL
-    =============================== */
+    ====================================================== */
 
     const [[ventaMesRes]] = await pool.query(
       `
@@ -240,15 +313,15 @@ export const obtenerDashboard = async (req, res) => {
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND created_at >= ${rangoMesInicio}
-      AND created_at < ${rangoMesFin}
+      AND created_at >= ?
+      AND created_at < ?
       `,
-      paramsSucursal
+      buildParams([inicioMesUTC, finMesUTC]),
     );
 
-    /* ===============================
+    /* =====================================================
        VENTA MES ANTERIOR
-    =============================== */
+    ====================================================== */
 
     const [[ventaMesAnteriorRes]] = await pool.query(
       `
@@ -256,28 +329,28 @@ export const obtenerDashboard = async (req, res) => {
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND created_at >= ${rangoMesAnteriorInicio}
-      AND created_at < ${rangoMesAnteriorFin}
+      AND created_at >= ?
+      AND created_at < ?
       `,
-      paramsSucursal
+      buildParams([inicioMesAnteriorUTC, finMesAnteriorUTC]),
     );
 
-    /* ===============================
+    /* =====================================================
        INVENTARIO VALORIZADO
-    =============================== */
+    ====================================================== */
 
     const [[inventarioRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(l.cantidad_actual * l.costo_unitario),0) AS inventario_valorizado
       FROM lotes l
-      ${esGlobal ? '' : 'WHERE l.sucursal_id = ? AND l.cantidad_actual > 0'}
+      ${esGlobal ? "" : "WHERE l.sucursal_id = ? AND l.cantidad_actual > 0"}
       `,
-      esGlobal ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId],
     );
 
-    /* ===============================
+    /* =====================================================
        TICKETS HOY
-    =============================== */
+    ====================================================== */
 
     const [[ticketsHoyRes]] = await pool.query(
       `
@@ -285,29 +358,29 @@ export const obtenerDashboard = async (req, res) => {
       FROM ventas
       WHERE estado = 'ACTIVA'
       ${filtroSucursal}
-      AND created_at >= ${rangoHoyInicio}
-      AND created_at < ${rangoHoyFin}
+      AND created_at >= ?
+      AND created_at < ?
       `,
-      paramsSucursal
+      buildParams([inicioUTC, finUTC]),
     );
 
-    /* ===============================
+    /* =====================================================
        PRODUCTOS BAJO STOCK
-    =============================== */
+    ====================================================== */
 
     const [[bajoStockRes]] = await pool.query(
       `
       SELECT COUNT(*) AS productos_bajo_stock
       FROM stock
-      ${esGlobal ? '' : 'WHERE sucursal_id = ?'}
-      ${esGlobal ? 'WHERE' : 'AND'} cantidad <= 5
+      ${esGlobal ? "" : "WHERE sucursal_id = ?"}
+      ${esGlobal ? "WHERE" : "AND"} cantidad <= 5
       `,
-      esGlobal ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId],
     );
 
-    /* ===============================
+    /* =====================================================
        PRODUCTOS ACTIVOS
-    =============================== */
+    ====================================================== */
 
     const [[productosRes]] = await pool.query(`
       SELECT COUNT(*) AS total_productos
@@ -315,22 +388,22 @@ export const obtenerDashboard = async (req, res) => {
       WHERE estado = 1
     `);
 
-    /* ===============================
+    /* =====================================================
        TOTAL UNIDADES
-    =============================== */
+    ====================================================== */
 
     const [[unidadesRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(cantidad),0) AS total_unidades
       FROM stock
-      ${esGlobal ? '' : 'WHERE sucursal_id = ?'}
+      ${esGlobal ? "" : "WHERE sucursal_id = ?"}
       `,
-      esGlobal ? [] : [sucursalId]
+      esGlobal ? [] : [sucursalId],
     );
 
-    /* ===============================
+    /* =====================================================
        CRECIMIENTO %
-    =============================== */
+    ====================================================== */
 
     const ventaMesActual = ventaMesRes.venta_mes;
     const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior;
@@ -344,9 +417,9 @@ export const obtenerDashboard = async (req, res) => {
       crecimientoMes = 100;
     }
 
-    /* ===============================
-       RESPONSE
-    =============================== */
+    /* =====================================================
+       RESPONSE FINAL
+    ====================================================== */
 
     res.json({
       ventaHoy: ventaHoyRes.venta_hoy,
@@ -359,9 +432,8 @@ export const obtenerDashboard = async (req, res) => {
       totalProductos: productosRes.total_productos,
       totalUnidades: unidadesRes.total_unidades,
     });
-
   } catch (error) {
-    console.error('Error dashboard:', error);
-    res.status(500).json({ message: 'Error obteniendo dashboard' });
+    console.error("Error dashboard:", error);
+    res.status(500).json({ message: "Error obteniendo dashboard" });
   }
 };
