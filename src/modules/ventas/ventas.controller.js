@@ -874,20 +874,16 @@ export const descargarVentaPDF = async (req, res) => {
    FUNCIONES AUXILIARES
 ============================= */
 
-function formatearFechaHoraBO(fechaISO) {
-  const fecha = new Date(fechaISO);
-  return fecha.toLocaleString("es-BO", {
-    timeZone: "America/La_Paz",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-}
-
-function formatearMoneda(valor) {
-  return `Bs ${Number(valor).toFixed(2)}`;
-}
+// function formatearFechaHoraBO(fechaISO) {
+//   const fecha = new Date(fechaISO);
+//   return fecha.toLocaleString("es-BO", {
+//     timeZone: "America/La_Paz",
+//     year: "numeric",
+//     month: "2-digit",
+//     day: "2-digit",
+//     hour: "2-digit",
+//     minute: "2-digit",
+//     second: "2-digit",
+//     hour12: false,
+//   });
+// }
