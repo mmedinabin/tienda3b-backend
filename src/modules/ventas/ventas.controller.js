@@ -2,6 +2,33 @@ import pool from "../../db/pool.js";
 import { getUTCDateTime } from "../../utils/date.js";
 import PDFDocument from "pdfkit";
 
+/* =========================================
+   FORMATO FECHA BOLIVIA CORTO (UTC-4)
+========================================= */
+const formatearFechaCortaBO = (fechaUTC) => {
+  const fecha = new Date(fechaUTC);
+
+  const fechaBO = new Date(
+    fecha.toLocaleString("en-US", { timeZone: "America/La_Paz" })
+  );
+
+  const dia = String(fechaBO.getDate()).padStart(2, "0");
+  const mes = String(fechaBO.getMonth() + 1).padStart(2, "0");
+  const anio = fechaBO.getFullYear();
+
+  const horas = String(fechaBO.getHours()).padStart(2, "0");
+  const minutos = String(fechaBO.getMinutes()).padStart(2, "0");
+
+  return `${dia}/${mes}/${anio} ${horas}:${minutos}`;
+};
+
+/* =========================================
+   FORMATO MONEDA
+========================================= */
+const formatearMoneda = (valor) => {
+  return Number(valor).toFixed(2);
+};
+
 export const crearVenta = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
@@ -362,16 +389,14 @@ export const crearVenta = async (req, res) => {
   }
 };
 
-
-
 export const listarVentas = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
-if (sucursalId === null || sucursalId === undefined) {
-  return res.status(400).json({
-    message: "Debe seleccionar una sucursal para ver las ventas",
-  });
-}
+  if (sucursalId === null || sucursalId === undefined) {
+    return res.status(400).json({
+      message: "Debe seleccionar una sucursal para ver las ventas",
+    });
+  }
 
   try {
     /* ==============================
@@ -467,7 +492,7 @@ if (sucursalId === null || sucursalId === undefined) {
       }
     });
 
-    const resultado = ventas.map(v => ventasMap[v.id]);
+    const resultado = ventas.map((v) => ventasMap[v.id]);
 
     res.json(resultado);
   } catch (error) {
@@ -478,7 +503,7 @@ if (sucursalId === null || sucursalId === undefined) {
   }
 };
 
-export const descargarVentaPDF = async (req, res) => {
+export const descargarVentaPDFf = async (req, res) => {
   try {
     const { id } = req.params;
 
@@ -513,15 +538,24 @@ export const descargarVentaPDF = async (req, res) => {
 
     const [detalle] = await pool.query(
       `
-      SELECT 
-        d.cantidad,
-        d.precio_unitario,
-        d.precio_subtotal,
-        p.nombre
-      FROM venta_detalle d
-      JOIN productos p ON p.id = d.producto_id
-      WHERE d.venta_id = ?
-      `,
+  SELECT 
+    d.cantidad,
+    d.precio_unitario,
+    d.precio_subtotal,
+
+    TRIM(
+      CONCAT_WS(' ',
+        NULLIF(m.nombre, ''),
+        p.nombre,
+        NULLIF(p.descripcion, '')
+      )
+    ) AS producto_label
+
+  FROM venta_detalle d
+  JOIN productos p ON p.id = d.producto_id
+  LEFT JOIN marcas m ON m.id = p.marca_id
+  WHERE d.venta_id = ?
+  `,
       [id],
     );
 
@@ -667,6 +701,172 @@ export const descargarVentaPDF = async (req, res) => {
   } catch (error) {
     console.error("ERROR PDF VENTA:", error);
     res.status(500).json({ message: "Error al generar PDF" });
+  }
+};
+
+/* =========================================
+   TICKET 80MM
+========================================= */
+export const descargarVentaPDF = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    /* =============================
+       1️⃣ CABECERA VENTA
+    ============================== */
+
+    const [[venta]] = await pool.query(
+      `
+      SELECT 
+        v.codigo,
+        v.created_at,
+        v.total,
+        v.saldo,
+        v.tipo_pago,
+        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+      FROM ventas v
+      LEFT JOIN clientes c ON c.id = v.cliente_id
+      WHERE v.id = ?
+      `,
+      [id]
+    );
+
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada" });
+    }
+
+    /* =============================
+       2️⃣ DETALLE CON LABEL
+    ============================== */
+
+    const [detalle] = await pool.query(
+      `
+      SELECT 
+        d.cantidad,
+        d.precio_unitario,
+        d.precio_subtotal,
+
+        TRIM(
+          CONCAT_WS(' ',
+            NULLIF(m.nombre, ''),
+            p.nombre,
+            NULLIF(p.descripcion, '')
+          )
+        ) AS producto_label
+
+      FROM venta_detalle d
+      JOIN productos p ON p.id = d.producto_id
+      LEFT JOIN marcas m ON m.id = p.marca_id
+      WHERE d.venta_id = ?
+      `,
+      [id]
+    );
+
+    /* =============================
+       CONFIG TICKET 80MM
+       80mm ≈ 226 puntos
+    ============================== */
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=ticket-${venta.codigo}.pdf`
+    );
+
+    const doc = new PDFDocument({
+      size: [226, 2000], // altura grande para que no corte
+      margin: 10,
+    });
+
+    doc.pipe(res);
+
+    const center = { align: "center" };
+
+    /* =============================
+       HEADER
+    ============================== */
+
+    doc.font("Helvetica-Bold").fontSize(12).text("TIENDA 3B", center);
+    doc.font("Helvetica").fontSize(9).text("Valles Cruceños", center);
+
+    doc.moveDown(0.5);
+    doc.fontSize(8).text("--------------------------------", center);
+
+    /* =============================
+       DATOS VENTA
+    ============================== */
+
+    doc.font("Helvetica").fontSize(8);
+
+    doc.text(`Venta: ${venta.codigo}`);
+    doc.text(`Fecha: ${formatearFechaCortaBO(venta.created_at)}`);
+    doc.text(`Cliente: ${venta.cliente}`);
+    doc.text(`Pago: ${venta.tipo_pago}`);
+
+    doc.text("--------------------------------");
+
+    /* =============================
+       DETALLE PRODUCTOS
+    ============================== */
+
+    detalle.forEach((item) => {
+      // Nombre producto (puede ocupar varias líneas)
+      doc.font("Helvetica-Bold").text(item.producto_label, {
+        width: 200,
+      });
+
+      // Línea cantidad x precio    subtotal
+      doc.font("Helvetica");
+
+      doc.text(
+        `${item.cantidad} x ${formatearMoneda(
+          item.precio_unitario
+        )}     ${formatearMoneda(item.precio_subtotal)}`,
+        {
+          align: "right",
+        }
+      );
+
+      doc.moveDown(0.4);
+    });
+
+    doc.text("--------------------------------");
+
+    /* =============================
+       TOTALES
+    ============================== */
+
+    doc.font("Helvetica-Bold");
+
+    doc.text(`TOTAL: ${formatearMoneda(venta.total)}`, {
+      align: "right",
+    });
+
+    if (Number(venta.saldo) > 0) {
+      doc.text(`SALDO: ${formatearMoneda(venta.saldo)}`, {
+        align: "right",
+      });
+    }
+
+    doc.moveDown();
+    doc.text("--------------------------------", center);
+
+    /* =============================
+       FOOTER
+    ============================== */
+
+    const fechaImpresion = formatearFechaCortaBO(new Date());
+
+    doc.font("Helvetica").fontSize(7);
+
+    doc.text(`Imp: ${fechaImpresion}`, center);
+    doc.moveDown(0.5);
+    doc.text("Gracias por su compra", center);
+
+    doc.end();
+  } catch (error) {
+    console.error("ERROR TICKET:", error);
+    res.status(500).json({ message: "Error al generar Ticket" });
   }
 };
 
