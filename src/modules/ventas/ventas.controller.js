@@ -390,21 +390,15 @@ export const crearVenta = async (req, res) => {
 };
 
 export const listarVentas = async (req, res) => {
-  const sucursalId = req.sucursalActiva;
-
-  if (sucursalId === null || sucursalId === undefined) {
-    return res.status(400).json({
-      message: "Debe seleccionar una sucursal para ver las ventas",
-    });
-  }
-
   try {
+    const sucursalId = req.sucursalActiva;
+    const esGlobal = sucursalId == null;
+
     /* ==============================
-       1️⃣ Últimas 25 ventas
+       1️⃣ Query base
     =============================== */
 
-    const [ventas] = await pool.query(
-      `
+    let queryVentasrrr = `
       SELECT 
         v.id,
         v.codigo,
@@ -418,15 +412,56 @@ export const listarVentas = async (req, res) => {
         v.estado_pago
       FROM ventas v
       LEFT JOIN clientes c ON c.id = v.cliente_id
-      WHERE v.sucursal_id = ?
+    `;
+    let queryVentas = `
+  SELECT 
+    v.id,
+    v.codigo,
+    v.created_at AS fecha,
+
+    IFNULL(c.nombre, 'SIN NOMBRE') AS cliente,
+    v.cliente_id,
+
+    v.tipo_pago,
+    v.total,
+    v.saldo,
+    v.estado,
+    v.estado_pago,
+
+    s.id AS sucursal_id,
+    CONCAT(
+      s.codigo_sucursal,
+      ' - ',
+      ci.nombre
+    ) AS sucursal
+
+  FROM ventas v
+
+  LEFT JOIN clientes c ON c.id = v.cliente_id
+
+  INNER JOIN sucursales s ON s.id = v.sucursal_id
+  INNER JOIN ciudades ci ON ci.id = s.ciudad_id
+`;
+
+    const params = [];
+
+    if (!esGlobal) {
+      queryVentas += ` WHERE v.sucursal_id = ?`;
+      params.push(sucursalId);
+    }
+
+    queryVentas += `
       ORDER BY v.created_at DESC
-      LIMIT 25
-      `,
-      [sucursalId],
-    );
+      LIMIT ${esGlobal ? 50 : 25}
+    `;
+
+    const [ventas] = await pool.query(queryVentas, params);
 
     if (ventas.length === 0) {
-      return res.json([]);
+      return res.json({
+        esGlobal,
+        data: [],
+      });
     }
 
     /* ==============================
@@ -434,12 +469,11 @@ export const listarVentas = async (req, res) => {
     =============================== */
 
     const ventaIds = ventas.map((v) => v.id);
+    const placeholders = ventaIds.map(() => "?").join(",");
 
     /* ==============================
-       3️⃣ Traer detalle correcto
+       3️⃣ Traer detalle
     =============================== */
-
-    const placeholders = ventaIds.map(() => "?").join(",");
 
     const [detalles] = await pool.query(
       `
@@ -494,7 +528,10 @@ export const listarVentas = async (req, res) => {
 
     const resultado = ventas.map((v) => ventasMap[v.id]);
 
-    res.json(resultado);
+    res.json({
+      esGlobal,
+      data: resultado,
+    });
   } catch (error) {
     console.error("ERROR LISTAR VENTAS:", error);
     res.status(500).json({
@@ -566,26 +603,6 @@ export const descargarVentaPDF = async (req, res) => {
   `,
       [id],
     );
-    // const [detalle] = await pool.query(
-    //   `
-    //   SELECT
-    //     d.cantidad,
-    //     d.precio_unitario,
-    //     d.precio_subtotal,
-    //     TRIM(
-    //       CONCAT_WS(' ',
-    //         NULLIF(m.nombre, ''),
-    //         p.nombre,
-    //         NULLIF(p.descripcion, '')
-    //       )
-    //     ) AS producto_label
-    //   FROM venta_detalle d
-    //   JOIN productos p ON p.id = d.producto_id
-    //   LEFT JOIN marcas m ON m.id = p.marca_id
-    //   WHERE d.venta_id = ?
-    //   `,
-    //   [id],
-    // );
 
     /* =============================
        CONFIG ALTURA DINÁMICA
@@ -614,9 +631,6 @@ export const descargarVentaPDF = async (req, res) => {
     doc.pipe(res);
 
     const CONTENT_WIDTH = TICKET_WIDTH - MARGIN * 2;
-    // const colLeft = MARGIN;
-    // const colPrecio = 110;
-    // const colSub = 165;
 
     const colLeft = MARGIN;
     const colCant = MARGIN + 8; // 👈 mover un poco a la derecha
@@ -735,11 +749,6 @@ export const descargarVentaPDF = async (req, res) => {
 
     doc.text("TOTAL:", colLeft, totalY);
 
-    // doc.text(formatearMoneda(venta.total), colSub, totalY, {
-    //   width: 50,
-    //   align: "right",
-    // });
-
     doc.text(formatearMoneda(venta.total), colSub + 5, totalY, {
       width: 45,
       align: "right",
@@ -788,20 +797,240 @@ export const descargarVentaPDF = async (req, res) => {
   }
 };
 
-/* =============================
-   FUNCIONES AUXILIARES
-============================= */
+export const anularVenta = async (req, res) => {
+  const sucursalId = req.sucursalActiva;
+  const { id } = req.params;
+  const { motivo } = req.body;
 
-// function formatearFechaHoraBO(fechaISO) {
-//   const fecha = new Date(fechaISO);
-//   return fecha.toLocaleString("es-BO", {
-//     timeZone: "America/La_Paz",
-//     year: "numeric",
-//     month: "2-digit",
-//     day: "2-digit",
-//     hour: "2-digit",
-//     minute: "2-digit",
-//     second: "2-digit",
-//     hour12: false,
-//   });
-// }
+  const usuarioId = req.user?.id || null;
+
+  if (sucursalId === null || sucursalId === undefined) {
+    return res.status(400).json({
+      message: "Debe seleccionar una sucursal específica para anular la venta",
+    });
+  }
+
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const nowUTC = getUTCDateTime();
+
+    /* =====================================================
+       1️⃣ BLOQUEAR VENTA
+    ====================================================== */
+
+    const [[venta]] = await conn.query(
+      `SELECT *
+       FROM ventas
+       WHERE id = ?
+       FOR UPDATE`,
+      [id],
+    );
+
+    if (!venta) throw new Error("Venta no encontrada");
+
+    if (venta.estado === "ANULADA") throw new Error("La venta ya está anulada");
+
+    const sucursalId = venta.sucursal_id;
+    const codigoVenta = venta.codigo;
+
+    /* =====================================================
+       2️⃣ OBTENER DETALLES + LOTES CONSUMIDOS
+    ====================================================== */
+
+    const [movimientos] = await conn.query(
+      `SELECT 
+          vd.id AS detalle_id,
+          vd.producto_id,
+          vd.cantidad AS cantidad_detalle,
+          vl.lote_id,
+          vl.cantidad AS cantidad_lote,
+          vl.subtotal_costo
+       FROM venta_detalle vd
+       JOIN venta_lotes vl ON vl.venta_detalle_id = vd.id
+       WHERE vd.venta_id = ?
+       FOR UPDATE`,
+      [id],
+    );
+
+    if (!movimientos.length)
+      throw new Error("No se encontraron movimientos para revertir");
+
+    /* =====================================================
+       3️⃣ AGRUPAR POR PRODUCTO PARA STOCK Y KARDEX
+    ====================================================== */
+
+    const resumenProductos = {};
+
+    for (const mov of movimientos) {
+      const productoId = mov.producto_id;
+
+      if (!resumenProductos[productoId]) {
+        resumenProductos[productoId] = {
+          cantidad: 0,
+          totalCosto: 0,
+        };
+      }
+
+      resumenProductos[productoId].cantidad += Number(mov.cantidad_lote);
+      resumenProductos[productoId].totalCosto += Number(mov.subtotal_costo);
+    }
+
+    /* =====================================================
+       4️⃣ REVERTIR LOTES (DEVOLVER A LOS MISMOS)
+    ====================================================== */
+
+    for (const mov of movimientos) {
+      await conn.query(
+        `UPDATE lotes
+         SET cantidad_actual = cantidad_actual + ?
+         WHERE id = ?`,
+        [mov.cantidad_lote, mov.lote_id],
+      );
+    }
+
+    /* =====================================================
+       5️⃣ REVERTIR STOCK GENERAL
+    ====================================================== */
+
+    for (const productoId of Object.keys(resumenProductos)) {
+      const cantidad = resumenProductos[productoId].cantidad;
+
+      await conn.query(
+        `UPDATE stock
+         SET cantidad = cantidad + ?,
+             updated_at = ?
+         WHERE producto_id = ?
+         AND sucursal_id = ?`,
+        [cantidad, nowUTC, productoId, sucursalId],
+      );
+    }
+
+    /* =====================================================
+       6️⃣ INSERTAR KARDEX ENTRADA (REVERSIÓN)
+    ====================================================== */
+
+    for (const productoId of Object.keys(resumenProductos)) {
+      const cantidad = resumenProductos[productoId].cantidad;
+      const totalCosto = resumenProductos[productoId].totalCosto;
+
+      const [[ultimo]] = await conn.query(
+        `SELECT saldo_cantidad, saldo_total
+         FROM kardex
+         WHERE producto_id = ?
+         AND sucursal_id = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+        [productoId, sucursalId],
+      );
+
+      const saldoAnteriorCantidad = ultimo?.saldo_cantidad || 0;
+      const saldoAnteriorTotal = Number(ultimo?.saldo_total || 0);
+
+      const nuevoSaldoCantidad = saldoAnteriorCantidad + cantidad;
+      const nuevoSaldoTotal = saldoAnteriorTotal + totalCosto;
+
+      const costoUnitario = cantidad > 0 ? totalCosto / cantidad : 0;
+
+      await conn.query(
+        `INSERT INTO kardex
+         (producto_id, sucursal_id,
+          tipo, referencia,
+          cantidad, costo_unitario,
+          total, saldo_cantidad,
+          saldo_total, created_at)
+         VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          productoId,
+          sucursalId,
+          `ANULACION ${codigoVenta}`,
+          cantidad,
+          costoUnitario,
+          totalCosto,
+          nuevoSaldoCantidad,
+          nuevoSaldoTotal,
+          nowUTC,
+        ],
+      );
+    }
+
+    /* =====================================================
+       7️⃣ REVERTIR PAGOS CLIENTE
+    ====================================================== */
+
+    const [pagos] = await conn.query(
+      `SELECT id, monto
+       FROM cliente_pagos
+       WHERE venta_id = ?
+       FOR UPDATE`,
+      [id],
+    );
+
+    for (const pago of pagos) {
+      await conn.query(
+        `INSERT INTO cliente_pagos
+         (venta_id, monto, fecha, created_at)
+         VALUES (?, ?, ?, ?)`,
+        [id, -Number(pago.monto), nowUTC.split(" ")[0], nowUTC],
+      );
+    }
+
+    /* =====================================================
+       8️⃣ ACTUALIZAR VENTA
+    ====================================================== */
+
+    await conn.query(
+      `UPDATE ventas
+       SET estado = 'ANULADA',
+           estado_pago = 'PENDIENTE',
+           saldo = 0,
+           utilidad_total = 0,
+           anulada_at = ?,
+           anulada_by = ?,
+           motivo_anulacion = ?,
+           updated_at = ?
+       WHERE id = ?`,
+      [nowUTC, usuarioId, motivo || "Sin motivo especificado", nowUTC, id],
+    );
+
+    /* =====================================================
+       9️⃣ AUDITORÍA
+    ====================================================== */
+
+    await conn.query(
+      `INSERT INTO auditoria
+       (tabla, registro_id, accion,
+        detalle, usuario_id, created_at)
+       VALUES (?, ?, 'ANULACION', ?, ?, ?)`,
+      [
+        "ventas",
+        id,
+        JSON.stringify({
+          codigo: codigoVenta,
+          motivo: motivo || null,
+        }),
+        usuarioId,
+        nowUTC,
+      ],
+    );
+
+    await conn.commit();
+
+    res.json({
+      message: "Venta anulada correctamente",
+      codigo: codigoVenta,
+    });
+  } catch (error) {
+    await conn.rollback();
+
+    console.error("ERROR ANULAR VENTA:", error);
+
+    res.status(400).json({
+      message: error.message || "Error al anular venta",
+    });
+  } finally {
+    conn.release();
+  }
+};

@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import authMiddleware from '../../middlewares/auth.middleware.js';
+import { checkPermiso } from '../../middlewares/permisos.middleware.js';
 import {
   crearEmpleado,
   listarEmpleados,
@@ -13,7 +14,14 @@ const router = Router()
 
 router.use(authMiddleware)
 
-router.get('/', listarEmpleados)
+router.get(
+  '/',
+  authMiddleware,
+  checkPermiso('empleados', 'ver'),
+  listarEmpleados
+);
+
+
 router.get('/usuarios-disponibles', listarUsuariosDisponibles)
 router.get('/:id', obtenerEmpleado)
 router.put('/:id', actualizarEmpleado)

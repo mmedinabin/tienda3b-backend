@@ -3,7 +3,6 @@ import pool from "../../db/pool.js";
 import { getUTCDateTime } from "../../utils/date.js";
 import PDFDocument from "pdfkit";
 
-
 export const crearCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
 
@@ -292,7 +291,10 @@ export const crearCompra = async (req, res) => {
 
 export const listarCompras = async (req, res) => {
   try {
-    const [rows] = await pool.query(`
+    const sucursalId = req.sucursalActiva;
+    const esGlobal = sucursalId == null;
+
+    let queryCompras = `
       SELECT 
         c.id,
         c.codigo,
@@ -300,20 +302,91 @@ export const listarCompras = async (req, res) => {
         c.tipo_pago,
         c.total,
         c.saldo,
+        c.estado,
         p.nombre AS proveedor,
         CONCAT(s.codigo_sucursal, ' - ', ci.nombre) AS sucursal
       FROM compras c
       JOIN proveedores p ON p.id = c.proveedor_id
       JOIN sucursales s ON s.id = c.sucursal_id
       JOIN ciudades ci ON ci.id = s.ciudad_id
-      ORDER BY c.id DESC
-      LIMIT 150
-    `);
+    `;
 
-    res.json(rows);
+    const params = [];
+
+    if (!esGlobal) {
+      queryCompras += ` WHERE c.sucursal_id = ?`;
+      params.push(sucursalId);
+    }
+
+    queryCompras += `
+      ORDER BY c.fecha_compra DESC
+      LIMIT ${esGlobal ? 50 : 25}
+    `;
+
+    const [compras] = await pool.query(queryCompras, params);
+
+    if (compras.length === 0) {
+      return res.json({ esGlobal, data: [] });
+    }
+
+    const compraIds = compras.map((c) => c.id);
+    const placeholders = compraIds.map(() => "?").join(",");
+
+    const [detalles] = await pool.query(
+      `
+      SELECT 
+        cd.compra_id,
+
+        TRIM(
+          CONCAT(
+            IFNULL(m.nombre, ''),
+            IF(m.nombre IS NOT NULL AND m.nombre <> '', ' ', ''),
+            p.nombre,
+            IF(p.descripcion IS NOT NULL AND p.descripcion <> '', ' ', ''),
+            IFNULL(p.descripcion, '')
+          )
+        ) AS producto,
+
+        cd.cantidad,
+        cd.costo_unitario,
+        cd.costo_subtotal
+
+      FROM compra_detalle cd
+      INNER JOIN productos p ON p.id = cd.producto_id
+      LEFT JOIN marcas m ON m.id = p.marca_id
+      WHERE cd.compra_id IN (${placeholders})
+      `,
+      compraIds,
+    );
+
+    const comprasMap = {};
+
+    compras.forEach((c) => {
+      comprasMap[c.id] = {
+        ...c,
+        productos: [],
+      };
+    });
+
+    detalles.forEach((d) => {
+      if (comprasMap[d.compra_id]) {
+        comprasMap[d.compra_id].productos.push({
+          producto: d.producto,
+          cantidad: d.cantidad,
+          costo_unitario: d.costo_unitario,
+          subtotal: d.costo_subtotal,
+        });
+      }
+    });
+
+    const resultado = compras.map((c) => comprasMap[c.id]);
+
+    res.json({ esGlobal, data: resultado });
   } catch (error) {
     console.error("ERROR LISTAR COMPRAS:", error);
-    res.status(500).json({ message: "Error al listar compras" });
+    res.status(500).json({
+      message: "Error al listar compras",
+    });
   }
 };
 
@@ -326,6 +399,7 @@ export const descargarCompraPDF = async (req, res) => {
       SELECT 
         c.codigo,
         c.fecha_compra,
+        c.tipo_pago,
         c.total,
         c.saldo,
         p.nombre AS proveedor
@@ -342,15 +416,31 @@ export const descargarCompraPDF = async (req, res) => {
 
     const [detalle] = await pool.query(
       `
-      SELECT 
-        d.cantidad,
-        d.costo_unitario,
-        d.costo_subtotal,
-        pr.nombre
-      FROM compra_detalle d
-      JOIN productos pr ON pr.id = d.producto_id
-      WHERE d.compra_id = ?
-    `,
+  SELECT 
+    d.cantidad,
+    d.costo_unitario,
+    d.costo_subtotal,
+
+    TRIM(
+      CONCAT_WS(' ',
+        SUBSTRING_INDEX(pr.nombre, ' ', 1),
+        NULLIF(m.nombre, ''),
+        NULLIF(
+          SUBSTRING(
+            pr.nombre,
+            LENGTH(SUBSTRING_INDEX(pr.nombre, ' ', 1)) + 2
+          ),
+          ''
+        ),
+        NULLIF(pr.descripcion, '')
+      )
+    ) AS producto_label
+
+  FROM compra_detalle d
+  JOIN productos pr ON pr.id = d.producto_id
+  LEFT JOIN marcas m ON m.id = pr.marca_id
+  WHERE d.compra_id = ?
+  `,
       [id],
     );
 
@@ -397,8 +487,9 @@ export const descargarCompraPDF = async (req, res) => {
     doc.font("Helvetica").fontSize(11);
 
     doc.text(`Código: ${compra.codigo}`);
-    doc.text(`Fecha de compra: ${formatearFechaBO(compra.fecha_compra)}`);
+    doc.text(`Fecha: ${formatearFechaBO(compra.fecha_compra)}`);
     doc.text(`Proveedor: ${compra.proveedor}`);
+    doc.text(`Tipo Pago: ${compra.tipo_pago}`);
 
     doc.moveDown();
 
@@ -432,7 +523,7 @@ export const descargarCompraPDF = async (req, res) => {
 
     detalle.forEach((item, index) => {
       doc.text(index + 1, colNro, y);
-      doc.text(item.nombre, colDesc, y, { width: 250 });
+      doc.text(item.producto_label, colDesc, y, { width: 250 });
       doc.text(item.cantidad.toString(), colCant, y);
       doc.text(formatearMoneda(item.costo_unitario), colCosto, y);
       doc.text(formatearMoneda(item.costo_subtotal), colSub, y);
@@ -465,25 +556,217 @@ export const descargarCompraPDF = async (req, res) => {
 
     /* ====== PIE CON HORA LOCAL ====== */
 
-    const fechaImpresion = formatearFechaHoraBO(new Date());
+    const fechaImpresion = formatearFechaHoraCortaBO(new Date());
 
     doc
-      .font("Helvetica")
-      .fontSize(9)
-      .text(`Impreso el: ${fechaImpresion} (UTC-4)`, {
-        align: "right",
+      .font("Helvetica") // mismo font que antes
+      .fontSize(9) // mismo tamaño
+      .text(`Impreso: ${fechaImpresion}`, 350, doc.y, {
+        width: 195, // mismo ancho que TOTAL/SALDO
+        align: "right", // alineación igual
       });
 
     doc.moveDown();
 
-    doc.fontSize(9).text("Documento generado electrónicamente", {
-      align: "center",
-    });
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .text("Documento generado electrónicamente", 350, doc.y, {
+        width: 195,
+        align: "right", // alineación igual
+      });
 
     doc.end();
   } catch (error) {
     console.error("ERROR PDF COMPRA:", error);
     res.status(500).json({ message: "Error al generar PDF" });
+  }
+};
+
+export const anularCompra = async (req, res) => {
+  const sucursalId = req.sucursalActiva;
+    const { id } = req.params;
+
+  if (sucursalId === null || sucursalId === undefined) {
+    return res.status(400).json({
+      message:
+        "Debe seleccionar una sucursal específica para anular la compra",
+    });
+  }
+
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+    const nowUTC = getUTCDateTime();
+
+    /* ==============================
+       1️⃣ OBTENER COMPRA
+    ============================== */
+
+    const [[compra]] = await conn.query(
+      `SELECT * FROM compras
+       WHERE id = ? AND sucursal_id = ?
+       FOR UPDATE`,
+      [id, sucursalId],
+    );
+
+    if (!compra) throw new Error("Compra no encontrada");
+
+    if (compra.estado === "ANULADA")
+      throw new Error("La compra ya está anulada");
+
+    /* ==============================
+       2️⃣ OBTENER DETALLE
+    ============================== */
+
+    const [detalles] = await conn.query(
+      `SELECT * FROM compra_detalle
+       WHERE compra_id = ?`,
+      [id],
+    );
+
+    if (detalles.length === 0) throw new Error("Compra sin detalle");
+
+    /* ==============================
+       3️⃣ VALIDAR STOCK
+    ============================== */
+
+    for (const d of detalles) {
+      const [[stock]] = await conn.query(
+        `SELECT cantidad FROM stock
+         WHERE producto_id = ? AND sucursal_id = ?
+         FOR UPDATE`,
+        [d.producto_id, sucursalId],
+      );
+
+      if (!stock || stock.cantidad < d.cantidad) {
+        throw new Error(
+          `No se puede anular. Stock insuficiente para producto ${d.producto_id}`,
+        );
+      }
+    }
+
+    /* ==============================
+       4️⃣ REVERSIÓN PRODUCTO POR PRODUCTO
+    ============================== */
+
+    for (const d of detalles) {
+      const subtotal = Number(d.costo_subtotal);
+
+      // 🔹 RESTAR STOCK
+      await conn.query(
+        `UPDATE stock
+         SET cantidad = cantidad - ?, updated_at = ?
+         WHERE producto_id = ? AND sucursal_id = ?`,
+        [d.cantidad, nowUTC, d.producto_id, sucursalId],
+      );
+
+      // 🔹 AJUSTAR LOTE
+      await conn.query(
+        `UPDATE lotes
+         SET cantidad_actual = cantidad_actual - ?
+         WHERE compra_detalle_id = ?`,
+        [d.cantidad, d.id],
+      );
+
+      // 🔹 OBTENER SALDO ANTERIOR KARDEX
+      const [[ultimo]] = await conn.query(
+        `SELECT saldo_cantidad, saldo_total
+         FROM kardex
+         WHERE producto_id = ? AND sucursal_id = ?
+         ORDER BY id DESC
+         LIMIT 1`,
+        [d.producto_id, sucursalId],
+      );
+
+      const saldoAnteriorCantidad = ultimo?.saldo_cantidad || 0;
+      const saldoAnteriorTotal = Number(ultimo?.saldo_total || 0);
+
+      const nuevoSaldoCantidad = saldoAnteriorCantidad - d.cantidad;
+      const nuevoSaldoTotal = saldoAnteriorTotal - subtotal;
+
+      // 🔹 INSERTAR MOVIMIENTO INVERSO
+      await conn.query(
+        `INSERT INTO kardex
+         (producto_id, sucursal_id,
+          tipo, referencia,
+          cantidad, costo_unitario,
+          total, saldo_cantidad,
+          saldo_total, created_at)
+         VALUES (?, ?, 'SALIDA', ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          d.producto_id,
+          sucursalId,
+          compra.codigo + " (ANULACION)",
+          d.cantidad,
+          d.costo_unitario,
+          subtotal,
+          nuevoSaldoCantidad,
+          nuevoSaldoTotal,
+          nowUTC,
+        ],
+      );
+    }
+
+    /* ==============================
+       5️⃣ ANULAR PAGOS
+    ============================== */
+
+    await conn.query(
+      `UPDATE compra_pagos
+       SET estado = 'ANULADO'
+       WHERE compra_id = ?`,
+      [id],
+    );
+
+    /* ==============================
+       6️⃣ ACTUALIZAR COMPRA
+    ============================== */
+
+    await conn.query(
+      `UPDATE compras
+       SET estado = 'ANULADA',
+           saldo = 0,
+           updated_at = ?
+       WHERE id = ?`,
+      [nowUTC, id],
+    );
+
+    /* ==============================
+       7️⃣ AUDITORÍA
+    ============================== */
+
+    await conn.query(
+      `INSERT INTO auditoria
+       (tabla, registro_id, accion,
+        detalle, usuario_id, created_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [
+        "compras",
+        id,
+        "ANULAR",
+        JSON.stringify({
+          codigo: compra.codigo,
+          total: compra.total,
+        }),
+        req.user?.id,
+        nowUTC,
+      ],
+    );
+
+    await conn.commit();
+
+    res.json({
+      message: "Compra anulada correctamente",
+    });
+  } catch (error) {
+    await conn.rollback();
+    res.status(400).json({
+      message: error.message || "Error al anular compra",
+    });
+  } finally {
+    conn.release();
   }
 };
 
@@ -496,20 +779,22 @@ function formatearFechaBO(fechaISO) {
   });
 }
 
-function formatearFechaHoraBO(fechaISO) {
-  const fecha = new Date(fechaISO);
-  return fecha.toLocaleString("es-BO", {
+const formatearMoneda = (valor) => {
+  return new Intl.NumberFormat("es-BO", {
+    style: "currency",
+    currency: "BOB",
+    minimumFractionDigits: 2,
+  }).format(valor || 0);
+};
+
+function formatearFechaHoraCortaBO(fecha) {
+  return new Intl.DateTimeFormat("es-BO", {
     timeZone: "America/La_Paz",
-    year: "numeric",
-    month: "2-digit",
     day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-    second: "2-digit",
     hour12: false,
-  });
-  function formatearMoneda(valor) {
-  return `Bs ${Number(valor).toFixed(2)}`;
-}
-
+  }).format(fecha);
 }

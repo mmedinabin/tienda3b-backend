@@ -1,23 +1,5 @@
 import pool from "../../db/pool.js";
 
-// export const listarSucursales = async (req, res) => {
-//   const [rows] = await pool.query(`
-//     SELECT
-//       s.id,
-//       s.codigo_sucursal,
-//       s.nombre,
-//       s.direccion,
-//       s.telefono,
-//       s.estado,
-//       c.nombre AS ciudad
-//     FROM sucursales s
-//     JOIN ciudades c ON c.id = s.ciudad_id
-//     ORDER BY s.codigo_sucursal
-//   `);
-
-//   res.json(rows);
-// };
-
 export const listarSucursales = async (req, res) => {
   try {
     const [rows] = await pool.query(`
@@ -126,3 +108,22 @@ export const actualizarSucursal = async (req, res) => {
     res.status(500).json({ message: "Error al actualizar sucursal" });
   }
 };
+
+export const listarSucursalesActivas = async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT 
+        s.id,
+        s.codigo_sucursal,
+        c.nombre AS ciudad
+      FROM sucursales s
+      JOIN ciudades c ON c.id = s.ciudad_id
+      WHERE s.estado = 1
+      ORDER BY s.codigo_sucursal
+    `)
+
+    res.json(rows)
+  } catch (error) {
+    res.status(500).json({ message: "Error al listar sucursales" })
+  }
+}

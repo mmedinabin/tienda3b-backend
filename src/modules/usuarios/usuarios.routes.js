@@ -13,7 +13,7 @@ import { crearUsuarioSchema } from './usuarios.validator.js';
 
 const router = Router();
 
-router.get('/', authMiddleware, checkPermiso('usuarios', 'ver'), listarUsuarios)
+router.get('/', authMiddleware, checkPermiso('USUARIOS', 'ver'), listarUsuarios)
 router.get('/:id', authMiddleware, checkPermiso('usuarios', 'ver'), obtenerUsuario)
 
 router.post(

@@ -1,165 +1,5 @@
 import pool from "../../db/pool.js";
 
-export const obtenerDashboardd = async (req, res) => {
-  try {
-    const sucursalId = req.sucursalActiva;
-
-    // 🔒 Si está en modo global
-    if (!sucursalId) {
-      return res.json({
-        requiereSeleccionSucursal: true,
-      });
-    }
-
-    /* ===========================
-       VENTA HOY
-    ============================ */
-    const [[ventaHoyRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(total),0) AS venta_hoy
-      FROM ventas
-      WHERE sucursal_id = ?
-      AND DATE(created_at) = CURDATE()
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       UTILIDAD HOY
-    ============================ */
-    const [[utilidadHoyRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(utilidad_total),0) AS utilidad_hoy
-      FROM ventas
-      WHERE sucursal_id = ?
-      AND DATE(created_at) = CURDATE()
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       VENTA MES ACTUAL
-    ============================ */
-    const [[ventaMesRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(total),0) AS venta_mes
-      FROM ventas
-      WHERE sucursal_id = ?
-      AND YEAR(created_at) = YEAR(CURDATE())
-      AND MONTH(created_at) = MONTH(CURDATE())
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       VENTA MES ANTERIOR
-    ============================ */
-    const [[ventaMesAnteriorRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(total),0) AS venta_mes_anterior
-      FROM ventas
-      WHERE sucursal_id = ?
-      AND YEAR(created_at) = YEAR(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
-      AND MONTH(created_at) = MONTH(DATE_SUB(CURDATE(), INTERVAL 1 MONTH))
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       INVENTARIO VALORIZADO
-    ============================ */
-    const [[inventarioRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(l.cantidad_actual * l.costo_unitario),0) AS inventario_valorizado
-      FROM lotes l
-      WHERE l.sucursal_id = ?
-      AND l.cantidad_actual > 0
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       TICKETS HOY
-    ============================ */
-    const [[ticketsHoyRes]] = await pool.query(
-      `
-      SELECT COUNT(*) AS tickets_hoy
-      FROM ventas
-      WHERE sucursal_id = ?
-      AND DATE(created_at) = CURDATE()
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       PRODUCTOS BAJO STOCK
-    ============================ */
-    const [[bajoStockRes]] = await pool.query(
-      `
-      SELECT COUNT(*) AS productos_bajo_stock
-      FROM stock
-      WHERE sucursal_id = ?
-      AND cantidad <= 5
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       PRODUCTOS EN CATÁLOGO (SKU)
-    ============================ */
-    const [[productosRes]] = await pool.query(
-      `
-      SELECT COUNT(*) AS total_productos
-      FROM productos
-      WHERE estado = 1
-      `,
-    );
-
-    /* ===========================
-       TOTAL PIEZAS FÍSICAS
-    ============================ */
-    const [[unidadesRes]] = await pool.query(
-      `
-      SELECT IFNULL(SUM(cantidad),0) AS total_unidades
-      FROM stock
-      WHERE sucursal_id = ?
-      `,
-      [sucursalId],
-    );
-
-    /* ===========================
-       CRECIMIENTO MES %
-    ============================ */
-    const ventaMesActual = ventaMesRes.venta_mes;
-    const ventaMesAnterior = ventaMesAnteriorRes.venta_mes_anterior;
-
-    let crecimientoMes = 0;
-
-    if (ventaMesAnterior > 0) {
-      crecimientoMes =
-        ((ventaMesActual - ventaMesAnterior) / ventaMesAnterior) * 100;
-    }
-
-    /* ===========================
-       RESPONSE FINAL
-    ============================ */
-    res.json({
-      ventaHoy: ventaHoyRes.venta_hoy,
-      utilidadHoy: utilidadHoyRes.utilidad_hoy,
-      ventaMes: ventaMesActual,
-      crecimientoMes,
-      inventarioValorizado: inventarioRes.inventario_valorizado,
-      ticketsHoy: ticketsHoyRes.tickets_hoy,
-      productosBajoStock: bajoStockRes.productos_bajo_stock,
-      totalProductos: productosRes.total_productos,
-      totalUnidades: unidadesRes.total_unidades,
-    });
-  } catch (error) {
-    console.error("Error dashboard:", error);
-    res.status(500).json({ message: "Error obteniendo dashboard" });
-  }
-};
-
 export const obtenerDashboard = async (req, res) => {
   try {
     const sucursalId = req.sucursalActiva;
@@ -168,114 +8,77 @@ export const obtenerDashboard = async (req, res) => {
     /* =====================================================
        RANGO HOY BOLIVIA (UTC-4 REAL)
     ====================================================== */
-    // Hora actual real
-    const ahora = new Date();
 
-    // Ajustamos a Bolivia restando 4 horas
+    const ahora = new Date();
     const boliviaNow = new Date(ahora.getTime() - 4 * 60 * 60 * 1000);
 
-    // Inicio del día Bolivia
     const inicioBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth(),
       boliviaNow.getDate(),
-      0,
-      0,
-      0,
+      0, 0, 0
     );
 
-    // Fin del día Bolivia
     const finBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth(),
       boliviaNow.getDate() + 1,
-      0,
-      0,
-      0,
+      0, 0, 0
     );
 
-    // Convertimos esos valores a UTC sumando 4 horas
     const inicioUTC = new Date(inicioBolivia.getTime() + 4 * 60 * 60 * 1000);
     const finUTC = new Date(finBolivia.getTime() + 4 * 60 * 60 * 1000);
 
-    // Formateo SQL limpio
     const formatSQLDate = (date) =>
       date.toISOString().slice(0, 19).replace("T", " ");
 
     const inicioSQL = formatSQLDate(inicioUTC);
     const finSQL = formatSQLDate(finUTC);
 
-    console.log("Inicio SQL:", inicioSQL);
-    console.log("Fin SQL:", finSQL);
-
     /* =====================================================
-   RANGO SEMANA ACTUAL (LUNES A HOY) BOLIVIA
-===================================================== */
+       RANGO SEMANA
+    ====================================================== */
 
-    // Día actual Bolivia (0=domingo, 1=lunes...)
     let day = boliviaNow.getDay();
-
-    // Ajustamos para que lunes sea inicio (1)
     let diffToMonday = day === 0 ? 6 : day - 1;
 
-    // Inicio de semana Bolivia (lunes 00:00)
     const inicioSemanaBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth(),
       boliviaNow.getDate() - diffToMonday,
-      0,
-      0,
-      0,
+      0, 0, 0
     );
 
-    // Fin = ahora mismo
-    const finSemanaBolivia = new Date(
-      boliviaNow.getFullYear(),
-      boliviaNow.getMonth(),
-      boliviaNow.getDate() + 1,
-      0,
-      0,
-      0,
-    );
-
-    // Convertimos a UTC sumando 4h
     const inicioSemanaUTC = new Date(
-      inicioSemanaBolivia.getTime() + 4 * 60 * 60 * 1000,
-    );
-    const finSemanaUTC = new Date(
-      finSemanaBolivia.getTime() + 4 * 60 * 60 * 1000,
+      inicioSemanaBolivia.getTime() + 4 * 60 * 60 * 1000
     );
 
     const inicioSemanaSQL = formatSQLDate(inicioSemanaUTC);
-    const finSemanaSQL = formatSQLDate(finSemanaUTC);
+    const finSemanaSQL = finSQL;
 
     /* =====================================================
-   RANGO MES ACTUAL BOLIVIA
-===================================================== */
+       RANGO MES ACTUAL
+    ====================================================== */
 
     const inicioMesBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth(),
-      1,
-      0,
-      0,
-      0,
+      1, 0, 0, 0
     );
 
     const finMesBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth() + 1,
-      1,
-      0,
-      0,
-      0,
+      1, 0, 0, 0
     );
 
-    // Convertimos a UTC sumando 4 horas
     const inicioMesUTC = new Date(
-      inicioMesBolivia.getTime() + 4 * 60 * 60 * 1000,
+      inicioMesBolivia.getTime() + 4 * 60 * 60 * 1000
     );
-    const finMesUTC = new Date(finMesBolivia.getTime() + 4 * 60 * 60 * 1000);
+
+    const finMesUTC = new Date(
+      finMesBolivia.getTime() + 4 * 60 * 60 * 1000
+    );
 
     const inicioMesSQL = formatSQLDate(inicioMesUTC);
     const finMesSQL = formatSQLDate(finMesUTC);
@@ -283,51 +86,40 @@ export const obtenerDashboard = async (req, res) => {
     /* =====================================================
        RANGO MES ANTERIOR
     ====================================================== */
-    /* =====================================================
-   RANGO MES ANTERIOR
-===================================================== */
 
     const inicioMesAnteriorBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth() - 1,
-      1,
-      0,
-      0,
-      0,
+      1, 0, 0, 0
     );
 
     const finMesAnteriorBolivia = new Date(
       boliviaNow.getFullYear(),
       boliviaNow.getMonth(),
-      1,
-      0,
-      0,
-      0,
+      1, 0, 0, 0
     );
 
     const inicioMesAnteriorUTC = new Date(
-      inicioMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000,
+      inicioMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000
     );
 
     const finMesAnteriorUTC = new Date(
-      finMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000,
+      finMesAnteriorBolivia.getTime() + 4 * 60 * 60 * 1000
     );
 
     const inicioMesAnteriorSQL = formatSQLDate(inicioMesAnteriorUTC);
     const finMesAnteriorSQL = formatSQLDate(finMesAnteriorUTC);
 
     /* =====================================================
-       FUNCION PARA PARAMETROS
+       HELPERS GLOBAL / SUCURSAL
     ====================================================== */
 
-    const buildParams = (extraParams = []) => {
-      return esGlobal ? [...extraParams] : [sucursalId, ...extraParams];
-    };
-
     const filtroSucursal = esGlobal ? "" : "AND sucursal_id = ?";
+    const buildParams = (extraParams = []) =>
+      esGlobal ? [...extraParams] : [sucursalId, ...extraParams];
 
     /* =====================================================
-       VENTA HOY
+       VENTAS HOY
     ====================================================== */
 
     const [[ventaHoyRes]] = await pool.query(
@@ -339,12 +131,8 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioSQL, finSQL]),
+      buildParams([inicioSQL, finSQL])
     );
-
-    /* =====================================================
-       UTILIDAD HOY
-    ====================================================== */
 
     const [[utilidadHoyRes]] = await pool.query(
       `
@@ -355,24 +143,20 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioSQL, finSQL]),
+      buildParams([inicioSQL, finSQL])
     );
 
     const [[ventaSemanaRes]] = await pool.query(
       `
-  SELECT IFNULL(SUM(total),0) AS venta_semana
-  FROM ventas
-  WHERE estado = 'ACTIVA'
-  ${filtroSucursal}
-  AND created_at >= ?
-  AND created_at < ?
-  `,
-      buildParams([inicioSemanaSQL, finSemanaSQL]),
+      SELECT IFNULL(SUM(total),0) AS venta_semana
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND created_at >= ?
+      AND created_at < ?
+      `,
+      buildParams([inicioSemanaSQL, finSemanaSQL])
     );
-
-    /* =====================================================
-       VENTA MES ACTUAL
-    ====================================================== */
 
     const [[ventaMesRes]] = await pool.query(
       `
@@ -383,12 +167,8 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioMesSQL, finMesSQL]),
+      buildParams([inicioMesSQL, finMesSQL])
     );
-
-    /* =====================================================
-       VENTA MES ANTERIOR
-    ====================================================== */
 
     const [[ventaMesAnteriorRes]] = await pool.query(
       `
@@ -399,52 +179,55 @@ export const obtenerDashboard = async (req, res) => {
       AND created_at >= ?
       AND created_at < ?
       `,
-      buildParams([inicioMesAnteriorSQL, finMesAnteriorSQL]),
+      buildParams([inicioMesAnteriorSQL, finMesAnteriorSQL])
     );
 
     /* =====================================================
-       INVENTARIO VALORIZADO
+       INVENTARIO
     ====================================================== */
 
     const [[inventarioRes]] = await pool.query(
       `
       SELECT IFNULL(SUM(l.cantidad_actual * l.costo_unitario),0) AS inventario_valorizado
       FROM lotes l
-      ${esGlobal ? "" : "WHERE l.sucursal_id = ? AND l.cantidad_actual > 0"}
+      WHERE l.cantidad_actual > 0
+      ${esGlobal ? "" : "AND l.sucursal_id = ?"}
       `,
-      esGlobal ? [] : [sucursalId],
+      esGlobal ? [] : [sucursalId]
     );
 
     /* =====================================================
        TICKETS HOY
     ====================================================== */
+
     const [[ticketsHoyRes]] = await pool.query(
       `
-  SELECT COUNT(*) AS tickets_hoy
-  FROM ventas
-  WHERE estado = 'ACTIVA'
-  AND sucursal_id = ?
-  AND created_at >= ?
-  AND created_at < ?
-  `,
-      [sucursalId, inicioSQL, finSQL],
+      SELECT COUNT(*) AS tickets_hoy
+      FROM ventas
+      WHERE estado = 'ACTIVA'
+      ${filtroSucursal}
+      AND created_at >= ?
+      AND created_at < ?
+      `,
+      buildParams([inicioSQL, finSQL])
     );
+
     /* =====================================================
-       PRODUCTOS BAJO STOCK
+       BAJO STOCK
     ====================================================== */
 
     const [[bajoStockRes]] = await pool.query(
       `
       SELECT COUNT(*) AS productos_bajo_stock
       FROM stock
-      ${esGlobal ? "" : "WHERE sucursal_id = ?"}
-      ${esGlobal ? "WHERE" : "AND"} cantidad <= 5
+      WHERE cantidad <= 5
+      ${esGlobal ? "" : "AND sucursal_id = ?"}
       `,
-      esGlobal ? [] : [sucursalId],
+      esGlobal ? [] : [sucursalId]
     );
 
     /* =====================================================
-       PRODUCTOS ACTIVOS
+       PRODUCTOS
     ====================================================== */
 
     const [[productosRes]] = await pool.query(`
@@ -463,7 +246,7 @@ export const obtenerDashboard = async (req, res) => {
       FROM stock
       ${esGlobal ? "" : "WHERE sucursal_id = ?"}
       `,
-      esGlobal ? [] : [sucursalId],
+      esGlobal ? [] : [sucursalId]
     );
 
     /* =====================================================
@@ -483,20 +266,23 @@ export const obtenerDashboard = async (req, res) => {
     }
 
     /* =====================================================
-       RESPONSE FINAL
+       RESPONSE
     ====================================================== */
 
     res.json({
+      esGlobal,
       ventaHoy: ventaHoyRes.venta_hoy,
       ventaSemana: ventaSemanaRes.venta_semana,
       utilidadHoy: utilidadHoyRes.utilidad_hoy,
       ventaMes: ventaMesActual,
+      crecimientoMes,
       inventarioValorizado: inventarioRes.inventario_valorizado,
       ticketsHoy: ticketsHoyRes.tickets_hoy,
       productosBajoStock: bajoStockRes.productos_bajo_stock,
       totalProductos: productosRes.total_productos,
       totalUnidades: unidadesRes.total_unidades,
     });
+
   } catch (error) {
     console.error("Error dashboard:", error);
     res.status(500).json({ message: "Error obteniendo dashboard" });

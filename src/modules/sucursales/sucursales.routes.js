@@ -4,6 +4,7 @@ import { checkPermiso } from '../../middlewares/permisos.middleware.js';
 import { validate } from '../../middlewares/validate.middleware.js';
 import {
   listarSucursales,
+  listarSucursalesActivas,
   crearSucursal,
   actualizarSucursal,
 } from './sucursales.controller.js';
@@ -20,6 +21,12 @@ router.get(
   checkPermiso('sucursales', 'ver'),
   listarSucursales
 );
+
+router.get(
+  '/activas',
+  authMiddleware,
+  listarSucursalesActivas
+)
 
 router.post(
   '/',

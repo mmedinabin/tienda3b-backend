@@ -2,7 +2,7 @@ import pool from "../../db/pool.js";
 import { guardarImagenProducto } from "../../utils/image.js";
 import { getUTCDateTime } from "../../utils/date.js";
 
-export const listarProductos = async (req, res) => {
+export const listarProductosss = async (req, res) => {
   const [rows] = await pool.query(`
     SELECT 
       p.id,
@@ -22,6 +22,71 @@ export const listarProductos = async (req, res) => {
     ORDER BY p.codigo ASC
   `);
   res.json(rows);
+};
+export const listarProductos = async (req, res) => {
+  try {
+    const sucursalId = req.sucursalActiva;
+    const esGlobal = sucursalId == null;
+
+    let query = `
+      SELECT 
+        p.id,
+        p.codigo,
+        p.nombre,
+        m.nombre AS marca,
+        p.descripcion,
+        p.tipo_presentacion,
+        p.unidad_medida,
+        p.imagen,
+        p.precio_venta,
+        p.estado,
+        c.nombre AS categoria,
+    `;
+
+    const params = [];
+
+    /* ==============================
+       STOCK SEGÚN MODO
+    =============================== */
+
+    if (esGlobal) {
+      query += `
+        IFNULL(SUM(s.cantidad), 0) AS stock
+      `;
+    } else {
+      query += `
+        IFNULL(s.cantidad, 0) AS stock
+      `;
+    }
+
+    query += `
+      FROM productos p
+      JOIN categorias c ON c.id = p.categoria_id
+      LEFT JOIN marcas m ON m.id = p.marca_id
+      LEFT JOIN stock s ON s.producto_id = p.id
+    `;
+
+    if (!esGlobal) {
+      query += ` AND s.sucursal_id = ? `;
+      params.push(sucursalId);
+    }
+
+    if (esGlobal) {
+      query += ` GROUP BY p.id `;
+    }
+
+    query += ` ORDER BY p.codigo ASC `;
+
+    const [rows] = await pool.query(query, params);
+
+    res.json({
+      esGlobal,
+      data: rows,
+    });
+  } catch (error) {
+    console.error("ERROR LISTAR PRODUCTOS:", error);
+    res.status(500).json({ message: "Error al listar productos" });
+  }
 };
 
 export const obtenerProducto = async (req, res) => {
@@ -301,10 +366,9 @@ export const actualizarProducto = async (req, res) => {
     /* =========================
        VALIDAR EXISTENCIA
     ========================= */
-    const [existe] = await pool.query(
-      "SELECT id FROM productos WHERE id = ?",
-      [id]
-    );
+    const [existe] = await pool.query("SELECT id FROM productos WHERE id = ?", [
+      id,
+    ]);
 
     if (!existe.length) {
       return res.status(404).json({
@@ -341,9 +405,7 @@ export const actualizarProducto = async (req, res) => {
     ========================= */
     const data = {
       categoria_id: Number(req.body.categoria_id),
-      marca_id: req.body.marca_id
-        ? Number(req.body.marca_id)
-        : null,
+      marca_id: req.body.marca_id ? Number(req.body.marca_id) : null,
       nombre: req.body.nombre.trim(),
       descripcion: req.body.descripcion || null,
       tipo_presentacion: req.body.tipo_presentacion || "UNIDAD",
@@ -360,15 +422,11 @@ export const actualizarProducto = async (req, res) => {
     /* =========================
        UPDATE
     ========================= */
-    await pool.query(
-      "UPDATE productos SET ? WHERE id = ?",
-      [data, id]
-    );
+    await pool.query("UPDATE productos SET ? WHERE id = ?", [data, id]);
 
     return res.json({
       message: "Producto actualizado correctamente",
     });
-
   } catch (error) {
     console.error("ERROR ACTUALIZAR PRODUCTO:", error);
 

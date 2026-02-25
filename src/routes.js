@@ -13,6 +13,8 @@ import ventasRoutes from "./modules/ventas/ventas.routes.js";
 import marcasRoutes from "./modules/marcas/marcas.routes.js";
 import stockRoutes from "./modules/stock/stock.routes.js";
 import dashboardRoutes from "./modules/dashboard/dashboard.routes.js";
+import reportesRoutes from './modules/reportes/reportes.routes.js'
+
 
 export default (app) => {
   app.use("/api/auth", authRoutes);
@@ -30,4 +32,5 @@ export default (app) => {
   app.use("/api/marcas", marcasRoutes);
   app.use("/api/stock", stockRoutes);
   app.use("/api/dashboard", dashboardRoutes);
+  app.use('/api/reportes', reportesRoutes);
 };
