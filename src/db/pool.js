@@ -1,4 +1,4 @@
-// import mysql from 'mysql2/promise';
+import mysql from 'mysql2/promise';
 
 //LOCAL + BD LOCAL
 // const pool = mysql.createPool({
@@ -9,6 +9,7 @@
 //   waitForConnections: true,
 //   connectionLimit: 10,
 // });
+// export default pool;
 
 //LOCAL + BD NUBE
 // const pool = mysql.createPool({
@@ -25,7 +26,7 @@
 
 
 //para nube
-import mysql from 'mysql2/promise';
+// import mysql from 'mysql2/promise';
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST,

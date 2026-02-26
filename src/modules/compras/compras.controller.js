@@ -585,12 +585,25 @@ export const descargarCompraPDF = async (req, res) => {
 
 export const anularCompra = async (req, res) => {
   const sucursalId = req.sucursalActiva;
-    const { id } = req.params;
+  const { id } = req.params;
+  const { motivo } = req.body;
+  const usuarioId = req.user?.id;
 
   if (sucursalId === null || sucursalId === undefined) {
     return res.status(400).json({
-      message:
-        "Debe seleccionar una sucursal específica para anular la compra",
+      message: "Debe seleccionar una sucursal específica para anular la compra",
+    });
+  }
+
+  if (!usuarioId) {
+    return res.status(401).json({
+      message: "Usuario no autenticado",
+    });
+  }
+
+  if (!motivo || motivo.trim() === "") {
+    return res.status(400).json({
+      message: "Debe ingresar un motivo de anulación",
     });
   }
 
@@ -724,13 +737,25 @@ export const anularCompra = async (req, res) => {
        6️⃣ ACTUALIZAR COMPRA
     ============================== */
 
+    // await conn.query(
+    //   `UPDATE compras
+    //    SET estado = 'ANULADA',
+    //        saldo = 0,
+    //        updated_at = ?
+    //    WHERE id = ?`,
+    //   [nowUTC, id],
+    // );
+
     await conn.query(
       `UPDATE compras
-       SET estado = 'ANULADA',
-           saldo = 0,
-           updated_at = ?
-       WHERE id = ?`,
-      [nowUTC, id],
+   SET estado = 'ANULADA',
+       saldo = 0,
+       anulada_at = ?,
+       anulada_by = ?,
+       motivo_anulacion = ?,
+       updated_at = ?
+   WHERE id = ?`,
+      [nowUTC, usuarioId, motivo, nowUTC, id],
     );
 
     /* ==============================

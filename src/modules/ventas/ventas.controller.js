@@ -809,6 +809,17 @@ export const anularVenta = async (req, res) => {
       message: "Debe seleccionar una sucursal específica para anular la venta",
     });
   }
+  if (!usuarioId) {
+    return res.status(401).json({
+      message: "Usuario no autenticado",
+    });
+  }
+
+  if (!motivo || motivo.trim() === "") {
+    return res.status(400).json({
+      message: "Debe ingresar un motivo de anulación",
+    });
+  }
 
   const conn = await pool.getConnection();
 
