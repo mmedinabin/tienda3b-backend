@@ -2,27 +2,6 @@ import pool from "../../db/pool.js";
 import { guardarImagenProducto } from "../../utils/image.js";
 import { getUTCDateTime } from "../../utils/date.js";
 
-export const listarProductosss = async (req, res) => {
-  const [rows] = await pool.query(`
-    SELECT 
-      p.id,
-      p.codigo,
-      p.nombre,
-      m.nombre AS marca,
-      p.descripcion,
-      p.tipo_presentacion,
-      p.unidad_medida,
-      p.imagen,
-      p.precio_venta,
-      p.estado,
-      c.nombre AS categoria
-    FROM productos p
-    JOIN categorias c ON c.id = p.categoria_id
-    LEFT JOIN marcas m ON m.id = p.marca_id
-    ORDER BY p.codigo ASC
-  `);
-  res.json(rows);
-};
 export const listarProductos = async (req, res) => {
   try {
     const sucursalId = req.sucursalActiva;
@@ -129,7 +108,7 @@ export const crearProducto = async (req, res) => {
   if (!nombre || !nombre.trim())
     return res.status(400).json({ message: "Nombre es obligatorio" });
 
-  if (!precioVenta || precioVenta <= 0)
+  if (isNaN(precioVenta) || precioVenta < 0)
     return res.status(400).json({ message: "Precio de venta inválido" });
 
   if (cantidadInicial < 0)
@@ -241,25 +220,64 @@ export const crearProducto = async (req, res) => {
     ========================= */
 
     if (cantidadInicial > 0) {
-      // Fecha vencimiento plano (YYYY-MM-DD)
+      // ======================
+      // 4.1 GENERAR SECUENCIA MOVIMIENTO
+      // ======================
+
+      let [[seqMov]] = await conn.query(
+        `
+    SELECT ultimo_numero
+    FROM secuencias
+    WHERE tipo = 'MOVIMIENTO' AND sucursal_id = 0
+    FOR UPDATE
+    `,
+      );
+
+      if (!seqMov) {
+        await conn.query(
+          `
+      INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
+      VALUES ('MOVIMIENTO', 0, 0)
+      `,
+        );
+        seqMov = { ultimo_numero: 0 };
+      }
+
+      const siguienteMov = seqMov.ultimo_numero + 1;
+
+      await conn.query(
+        `
+    UPDATE secuencias
+    SET ultimo_numero = ?
+    WHERE tipo = 'MOVIMIENTO' AND sucursal_id = 0
+    `,
+        [siguienteMov],
+      );
+
+      const codigoMovimiento = `MI-${String(siguienteMov).padStart(4, "0")}`;
+
+      // ======================
+      // 4.2 CREAR LOTE
+      // ======================
+
       const fechaVencimientoPlano = fecha_vencimiento
         ? new Date(fecha_vencimiento).toISOString().split("T")[0]
         : null;
 
       const [loteRes] = await conn.query(
         `
-        INSERT INTO lotes (
-          producto_id,
-          sucursal_id,
-          origen,
-          fecha_vencimiento,
-          costo_unitario,
-          cantidad_inicial,
-          cantidad_actual,
-          created_at
-        )
-        VALUES (?, ?, 'ENTRADA_INICIAL', ?, ?, ?, ?, ?)
-        `,
+    INSERT INTO lotes (
+      producto_id,
+      sucursal_id,
+      origen,
+      fecha_vencimiento,
+      costo_unitario,
+      cantidad_inicial,
+      cantidad_actual,
+      created_at
+    )
+    VALUES (?, ?, 'ENTRADA_INICIAL', ?, ?, ?, ?, ?)
+    `,
         [
           productoId,
           sucursalId,
@@ -273,57 +291,73 @@ export const crearProducto = async (req, res) => {
 
       const loteId = loteRes.insertId;
 
-      // Actualizar resumen stock
+      // ======================
+      // 4.3 CREAR CABECERA MOVIMIENTO
+      // ======================
+
+      const [movRes] = await conn.query(
+        `
+    INSERT INTO movimientos
+    (tipo_movimiento, codigo, sucursal_destino, motivo, created_by, created_at)
+    VALUES ('ENTRADA_INICIAL', ?, ?, 'STOCK INICIAL', ?, ?)
+    `,
+        [codigoMovimiento, sucursalId, req.user?.id || null, nowUTC],
+      );
+
+      const movimientoId = movRes.insertId;
+
+      // ======================
+      // 4.4 CREAR DETALLE MOVIMIENTO
+      // ======================
+
       await conn.query(
         `
-        INSERT INTO stock (producto_id, sucursal_id, cantidad, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE 
-          cantidad = cantidad + VALUES(cantidad),
-          updated_at = VALUES(updated_at)
-        `,
+    INSERT INTO movimientos_detalle
+    (movimiento_id, producto_id, lote_id, cantidad, costo_unitario)
+    VALUES (?, ?, ?, ?, ?)
+    `,
+        [movimientoId, productoId, loteId, cantidadInicial, costoUnitario],
+      );
+
+      // ======================
+      // 4.5 ACTUALIZAR STOCK
+      // ======================
+
+      await conn.query(
+        `
+    INSERT INTO stock (producto_id, sucursal_id, cantidad, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?)
+    ON DUPLICATE KEY UPDATE 
+      cantidad = cantidad + VALUES(cantidad),
+      updated_at = VALUES(updated_at)
+    `,
         [productoId, sucursalId, cantidadInicial, nowUTC, nowUTC],
       );
 
-      // Movimiento stock
-      await conn.query(
-        `
-        INSERT INTO movimientos_stock
-        (tipo_movimiento, producto_id, sucursal_destino,
-         lote_id, cantidad, costo_unitario, motivo,
-         created_by, created_at)
-        VALUES ('ENTRADA_INICIAL', ?, ?, ?, ?, ?, 'STOCK INICIAL', ?, ?)
-        `,
-        [
-          productoId,
-          sucursalId,
-          loteId,
-          cantidadInicial,
-          costoUnitario,
-          req.user?.id || null,
-          nowUTC,
-        ],
-      );
+      // ======================
+      // 4.6 INSERTAR KARDEX
+      // ======================
 
       const totalMovimiento = cantidadInicial * costoUnitario;
+
       await conn.query(
         `
-  INSERT INTO kardex
-  (producto_id, sucursal_id, tipo, referencia,
-   cantidad, costo_unitario, total,
-   saldo_cantidad, saldo_total,
-   created_at)
-  VALUES (?, ?, 'ENTRADA', 'STOCK INICIAL',
-          ?, ?, ?, ?, ?, ?)
-  `,
+    INSERT INTO kardex
+    (producto_id, sucursal_id, tipo, referencia,
+     cantidad, costo_unitario, total,
+     saldo_cantidad, saldo_total,
+     created_at)
+    VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?, ?, ?)
+    `,
         [
           productoId,
           sucursalId,
+          codigoMovimiento,
           cantidadInicial,
           costoUnitario,
           totalMovimiento,
-          cantidadInicial, // saldo cantidad
-          totalMovimiento, // saldo total
+          cantidadInicial,
+          totalMovimiento,
           nowUTC,
         ],
       );

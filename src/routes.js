@@ -13,24 +13,32 @@ import ventasRoutes from "./modules/ventas/ventas.routes.js";
 import marcasRoutes from "./modules/marcas/marcas.routes.js";
 import stockRoutes from "./modules/stock/stock.routes.js";
 import dashboardRoutes from "./modules/dashboard/dashboard.routes.js";
-import reportesRoutes from './modules/reportes/reportes.routes.js'
-
+import reportesRoutes from "./modules/reportes/reportes.routes.js";
+import movimientosRoutes from "./modules/movimientos/movimientos.routes.js";
 
 export default (app) => {
+  // Seguridad
   app.use("/api/auth", authRoutes);
   app.use("/api/usuarios", usuariosRoutes);
   app.use("/api/roles", rolesRoutes);
+
+  // Catálogos
   app.use("/api/sucursales", sucursalesRoutes);
   app.use("/api/ciudades", ciudadesRoutes);
+  app.use("/api/categorias", categoriasRoutes);
+  app.use("/api/marcas", marcasRoutes);
+  app.use("/api/productos", productosRoutes);
   app.use("/api/clientes", clientesRoutes);
   app.use("/api/proveedores", proveedoresRoutes);
-  app.use("/api/productos", productosRoutes);
-  app.use("/api/categorias", categoriasRoutes);
   app.use("/api/empleados", empleadosRoutes);
+
+  // Operaciones
   app.use("/api/compras", comprasRoutes);
   app.use("/api/ventas", ventasRoutes);
-  app.use("/api/marcas", marcasRoutes);
+  app.use("/api/movimientos", movimientosRoutes);
   app.use("/api/stock", stockRoutes);
+
+  // Reportes
   app.use("/api/dashboard", dashboardRoutes);
-  app.use('/api/reportes', reportesRoutes);
+  app.use("/api/reportes", reportesRoutes);
 };
