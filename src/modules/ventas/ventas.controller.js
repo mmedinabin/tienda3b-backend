@@ -540,10 +540,348 @@ export const listarVentas = async (req, res) => {
   }
 };
 
+/* =====================================
+   FUNCION NUMERO A LETRAS (BÁSICA BS)
+===================================== */
+function numeroALetras(numero) {
+  const n = Number(numero);
+
+  if (isNaN(n)) return "Cero 00/100";
+
+  const entero = Math.floor(n);
+  const decimal = Math.round((n - entero) * 100)
+    .toString()
+    .padStart(2, "0");
+
+  const unidades = [
+    "",
+    "Uno",
+    "Dos",
+    "Tres",
+    "Cuatro",
+    "Cinco",
+    "Seis",
+    "Siete",
+    "Ocho",
+    "Nueve",
+  ];
+
+  const especiales = [
+    "Diez",
+    "Once",
+    "Doce",
+    "Trece",
+    "Catorce",
+    "Quince",
+    "Dieciséis",
+    "Diecisiete",
+    "Dieciocho",
+    "Diecinueve",
+  ];
+
+  const decenas = [
+    "",
+    "",
+    "Veinte",
+    "Treinta",
+    "Cuarenta",
+    "Cincuenta",
+    "Sesenta",
+    "Setenta",
+    "Ochenta",
+    "Noventa",
+  ];
+
+  function convertir(num) {
+    if (num < 10) return unidades[num];
+
+    if (num >= 10 && num < 20) return especiales[num - 10];
+
+    if (num < 100) {
+      const d = Math.floor(num / 10);
+      const r = num % 10;
+      return r === 0 ? decenas[d] : `${decenas[d]} y ${unidades[r]}`;
+    }
+
+    if (num === 100) return "Cien";
+
+    if (num < 1000) {
+      const c = Math.floor(num / 100);
+      const r = num % 100;
+
+      const centenas = [
+        "",
+        "Ciento",
+        "Doscientos",
+        "Trescientos",
+        "Cuatrocientos",
+        "Quinientos",
+        "Seiscientos",
+        "Setecientos",
+        "Ochocientos",
+        "Novecientos",
+      ];
+
+      return r === 0 ? centenas[c] : `${centenas[c]} ${convertir(r)}`;
+    }
+
+    if (num < 1000000) {
+      const miles = Math.floor(num / 1000);
+      const r = num % 1000;
+
+      const milesTexto = miles === 1 ? "Mil" : `${convertir(miles)} Mil`;
+
+      return r === 0 ? milesTexto : `${milesTexto} ${convertir(r)}`;
+    }
+
+    return num.toString();
+  }
+
+  return `${convertir(entero)} ${decimal}/100`;
+}
+
+const formatBs = (n) =>
+  Number(n).toLocaleString("es-BO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+export const descargarVentaPDF = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    /* =============================
+       1️⃣ CABECERA
+    ============================== */
+
+    const [[venta]] = await pool.query(
+      `
+      SELECT 
+        v.codigo,
+        v.created_at,
+        v.total,
+        v.saldo,
+        v.tipo_pago,
+        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+      FROM ventas v
+      LEFT JOIN clientes c ON c.id = v.cliente_id
+      WHERE v.id = ?
+      `,
+      [id],
+    );
+
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada" });
+    }
+
+    /* =============================
+       2️⃣ DETALLE
+    ============================== */
+
+    const [detalle] = await pool.query(
+      `
+      SELECT 
+        d.cantidad,
+        d.precio_unitario,
+        d.precio_subtotal,
+        p.nombre AS producto_label
+      FROM venta_detalle d
+      JOIN productos p ON p.id = d.producto_id
+      WHERE d.venta_id = ?
+      `,
+      [id],
+    );
+
+    /* =============================
+       CONFIG PDF
+    ============================== */
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename=nota-entrega-${venta.codigo}.pdf`,
+    );
+
+    const doc = new PDFDocument({
+      size: "LETTER",
+      margin: 40,
+    });
+
+    doc.pipe(res);
+
+    const margin = doc.page.margins.left;
+    const pageWidth = doc.page.width;
+    //const tableWidth = pageWidth - margin * 2;
+
+    /* =============================
+       HEADER DOCUMENTO
+    ============================== */
+
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(16)
+      .text("NOTA DE ENTREGA", { align: "center" });
+
+    doc.moveDown(1.5);
+
+    doc.font("Helvetica").fontSize(10);
+
+    doc.text(`Código: ${venta.codigo}`);
+    doc.text(`Fecha: ${new Date(venta.created_at).toLocaleString()}`);
+    doc.text(`Cliente: ${venta.cliente}`);
+    doc.text(`Tipo de Pago: ${venta.tipo_pago}`);
+
+    doc.moveDown(1.5);
+
+    /* =============================
+   TABLA
+============================= */
+
+    let startY = doc.y;
+    const rowHeight = 25;
+
+    // Ajustamos columnas para que SUBTOTAL quede alineado con TOTAL
+    const colWidths = [
+      30, // #
+      290, // descripción
+      60, // cantidad
+      80, // unitario
+      80, // subtotal
+    ];
+
+    const headers = ["#", "DESCRIPCIÓN", "CANT.", "P. UNITARIO", "SUBTOTAL"];
+
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0);
+
+    // Header gris
+    doc
+      .rect(margin, startY, tableWidth, rowHeight)
+      .fillAndStroke("#e6e6e6", "black");
+
+    let x = margin;
+
+    doc.font("Helvetica-Bold").fontSize(9);
+
+    headers.forEach((header, i) => {
+      doc.fillColor("black").text(header, x, startY + 7, {
+        width: colWidths[i],
+        align: "center",
+      });
+
+      doc.rect(x, startY, colWidths[i], rowHeight).stroke();
+      x += colWidths[i];
+    });
+
+    startY += rowHeight;
+
+    /* =============================
+   FILAS
+============================= */
+
+    doc.font("Helvetica").fontSize(9);
+
+    detalle.forEach((item, index) => {
+      if (startY > doc.page.height - 120) {
+        doc.addPage();
+        startY = margin;
+      }
+
+      let xRow = margin;
+
+      const rowValues = [
+        index + 1,
+        item.producto_label,
+        item.cantidad,
+        formatBs(item.precio_unitario),
+        formatBs(item.precio_subtotal),
+      ];
+
+      rowValues.forEach((val, i) => {
+        doc.rect(xRow, startY, colWidths[i], rowHeight).stroke();
+
+        const isDescripcion = i === 1;
+
+        doc.text(
+          val.toString(),
+          isDescripcion ? xRow + 5 : xRow, // 👈 pequeño padding izquierdo
+          startY + 7,
+          {
+            width: isDescripcion ? colWidths[i] - 10 : colWidths[i], // 👈 compensar padding
+            align: isDescripcion ? "left" : "center",
+          },
+        );
+
+        xRow += colWidths[i];
+      });
+
+      startY += rowHeight;
+    });
+
+    /* =============================
+   TOTAL INTEGRADO A TABLA
+============================= */
+
+    // No sumamos espacio extra → pegado a la tabla
+
+    const totalRowY = startY;
+
+    // Calcular posiciones acumuladas
+    const col0 = margin;
+    const col1 = col0 + colWidths[0];
+    const col2 = col1 + colWidths[1];
+    const col3 = col2 + colWidths[2]; // inicio CANT
+    const col4 = col3 + colWidths[3]; // inicio SUBTOTAL
+
+    // Ancho combinado CANT + P.UNITARIO
+    const combinedWidth = colWidths[2] + colWidths[3];
+
+    // Dibujar celda combinada (CANT + UNITARIO)
+    doc.rect(col2, totalRowY, combinedWidth, rowHeight).stroke();
+
+    doc.font("Helvetica-Bold").fontSize(10);
+
+    const paddingRight = 6;
+
+    doc.text("TOTAL BS", col2, totalRowY + 5, {
+      width: combinedWidth - paddingRight,
+      align: "right",
+    });
+
+    // Dibujar celda SUBTOTAL
+    doc.rect(col4, totalRowY, colWidths[4], rowHeight).stroke();
+
+    doc.text(formatBs(venta.total), col4, totalRowY + 7, {
+      width: colWidths[4],
+      align: "center",
+    });
+
+    startY += rowHeight;
+
+    /* =============================
+   TOTAL EN LITERAL (NEGRITA)
+============================= */
+
+    doc.moveDown(1.5);
+
+    doc
+      .font("Helvetica-Bold") // 👈 NEGRITA
+      .fontSize(10)
+      .text(`Son: ${numeroALetras(venta.total)} Bolivianos`, margin, doc.y, {
+        width: tableWidth,
+        align: "right",
+      });
+
+    doc.end();
+  } catch (error) {
+    console.error("ERROR PDF:", error);
+    res.status(500).json({ message: "Error al generar PDF" });
+  }
+};
+
 /* =============================
    DESCARGAR TICKET 80MM
 ============================= */
-export const descargarVentaPDF = async (req, res) => {
+export const descargarVentaPDFticket = async (req, res) => {
   try {
     const { id } = req.params;
 
