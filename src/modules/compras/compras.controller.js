@@ -390,6 +390,112 @@ export const listarCompras = async (req, res) => {
   }
 };
 
+/* =====================================
+   FUNCION NUMERO A LETRAS (BÁSICA BS)
+===================================== */
+function numeroALetras(numero) {
+  const n = Number(numero);
+
+  if (isNaN(n)) return "Cero 00/100";
+
+  const entero = Math.floor(n);
+  const decimal = Math.round((n - entero) * 100)
+    .toString()
+    .padStart(2, "0");
+
+  const unidades = [
+    "",
+    "Uno",
+    "Dos",
+    "Tres",
+    "Cuatro",
+    "Cinco",
+    "Seis",
+    "Siete",
+    "Ocho",
+    "Nueve",
+  ];
+
+  const especiales = [
+    "Diez",
+    "Once",
+    "Doce",
+    "Trece",
+    "Catorce",
+    "Quince",
+    "Dieciséis",
+    "Diecisiete",
+    "Dieciocho",
+    "Diecinueve",
+  ];
+
+  const decenas = [
+    "",
+    "",
+    "Veinte",
+    "Treinta",
+    "Cuarenta",
+    "Cincuenta",
+    "Sesenta",
+    "Setenta",
+    "Ochenta",
+    "Noventa",
+  ];
+
+  function convertir(num) {
+    if (num < 10) return unidades[num];
+
+    if (num >= 10 && num < 20) return especiales[num - 10];
+
+    if (num < 100) {
+      const d = Math.floor(num / 10);
+      const r = num % 10;
+      return r === 0 ? decenas[d] : `${decenas[d]} y ${unidades[r]}`;
+    }
+
+    if (num === 100) return "Cien";
+
+    if (num < 1000) {
+      const c = Math.floor(num / 100);
+      const r = num % 100;
+
+      const centenas = [
+        "",
+        "Ciento",
+        "Doscientos",
+        "Trescientos",
+        "Cuatrocientos",
+        "Quinientos",
+        "Seiscientos",
+        "Setecientos",
+        "Ochocientos",
+        "Novecientos",
+      ];
+
+      return r === 0 ? centenas[c] : `${centenas[c]} ${convertir(r)}`;
+    }
+
+    if (num < 1000000) {
+      const miles = Math.floor(num / 1000);
+      const r = num % 1000;
+
+      const milesTexto = miles === 1 ? "Mil" : `${convertir(miles)} Mil`;
+
+      return r === 0 ? milesTexto : `${milesTexto} ${convertir(r)}`;
+    }
+
+    return num.toString();
+  }
+
+  return `${convertir(entero)} ${decimal}/100`;
+}
+
+const formatBs = (n) =>
+  Number(n).toLocaleString("es-BO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
 export const descargarCompraPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -406,7 +512,7 @@ export const descargarCompraPDF = async (req, res) => {
       FROM compras c
       JOIN proveedores p ON p.id = c.proveedor_id
       WHERE c.id = ?
-    `,
+      `,
       [id],
     );
 
@@ -416,35 +522,19 @@ export const descargarCompraPDF = async (req, res) => {
 
     const [detalle] = await pool.query(
       `
-  SELECT 
-    d.cantidad,
-    d.costo_unitario,
-    d.costo_subtotal,
-
-    TRIM(
-      CONCAT_WS(' ',
-        SUBSTRING_INDEX(pr.nombre, ' ', 1),
-        NULLIF(m.nombre, ''),
-        NULLIF(
-          SUBSTRING(
-            pr.nombre,
-            LENGTH(SUBSTRING_INDEX(pr.nombre, ' ', 1)) + 2
-          ),
-          ''
-        ),
-        NULLIF(pr.descripcion, '')
-      )
-    ) AS producto_label
-
-  FROM compra_detalle d
-  JOIN productos pr ON pr.id = d.producto_id
-  LEFT JOIN marcas m ON m.id = pr.marca_id
-  WHERE d.compra_id = ?
-  `,
+      SELECT 
+        d.cantidad,
+        d.costo_unitario,
+        d.costo_subtotal,
+        pr.nombre AS producto_label
+      FROM compra_detalle d
+      JOIN productos pr ON pr.id = d.producto_id
+      WHERE d.compra_id = ?
+      `,
       [id],
     );
 
-    /* ====== CONFIG RESPUESTA ====== */
+    /* ===== CONFIG ===== */
 
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -452,128 +542,155 @@ export const descargarCompraPDF = async (req, res) => {
       `inline; filename=compra-${compra.codigo}.pdf`,
     );
 
-    const doc = new PDFDocument({ margin: 50 });
+    const doc = new PDFDocument({
+      size: "LETTER",
+      margin: 40,
+    });
+
     doc.pipe(res);
 
-    /* ====== ENCABEZADO EMPRESA ====== */
+    const margin = doc.page.margins.left;
+    const pageWidth = doc.page.width;
 
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(22)
-      .text("TIENDA 3B", { align: "center" });
+    const formatBs = (n) =>
+      Number(n).toLocaleString("es-BO", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
 
-    doc
-      .font("Helvetica")
-      .fontSize(12)
-      .text("VallesCruceños", { align: "center" });
-
-    doc.moveDown(0.5);
-
-    doc.moveTo(50, doc.y).lineTo(545, doc.y).stroke();
-
-    doc.moveDown();
-
-    /* ====== TÍTULO DOCUMENTO ====== */
+    /* ===== HEADER ===== */
 
     doc
       .font("Helvetica-Bold")
       .fontSize(16)
       .text("RECIBO DE COMPRA", { align: "center" });
 
-    doc.moveDown();
-
-    /* ====== DATOS GENERALES ====== */
-
-    doc.font("Helvetica").fontSize(11);
-
-    doc.text(`Código: ${compra.codigo}`);
-    doc.text(`Fecha: ${formatearFechaBO(compra.fecha_compra)}`);
-    doc.text(`Proveedor: ${compra.proveedor}`);
-    doc.text(`Tipo Pago: ${compra.tipo_pago}`);
-
-    doc.moveDown();
-
-    /* ====== TABLA ====== */
-
-    const startX = 50;
-    let y = doc.y;
-
-    const colNro = startX;
-    const colDesc = 80;
-    const colCant = 350;
-    const colCosto = 400;
-    const colSub = 470;
-
-    doc.font("Helvetica-Bold").fontSize(10);
-
-    doc.text("#", colNro, y);
-    doc.text("Producto", colDesc, y);
-    doc.text("Cant.", colCant, y);
-    doc.text("Costo", colCosto, y);
-    doc.text("Subtotal", colSub, y);
-
-    y += 15;
-
-    doc
-      .moveTo(50, y - 5)
-      .lineTo(545, y - 5)
-      .stroke();
+    doc.moveDown(1.5);
 
     doc.font("Helvetica").fontSize(10);
 
-    detalle.forEach((item, index) => {
-      doc.text(index + 1, colNro, y);
-      doc.text(item.producto_label, colDesc, y, { width: 250 });
-      doc.text(item.cantidad.toString(), colCant, y);
-      doc.text(formatearMoneda(item.costo_unitario), colCosto, y);
-      doc.text(formatearMoneda(item.costo_subtotal), colSub, y);
-      y += 18;
-    });
+    doc.text(`Código: ${compra.codigo}`);
+    doc.text(
+      `Fecha: ${new Date(compra.fecha_compra).toLocaleDateString("es-BO", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+      })}`,
+    );
+    //doc.text(`Fecha: ${new Date(compra.fecha_compra).toLocaleString()}`);
+    doc.text(`Proveedor: ${compra.proveedor}`);
+    doc.text(`Tipo de Pago: ${compra.tipo_pago}`);
 
-    y += 10;
+    doc.moveDown(1.5);
 
-    doc.moveTo(300, y).lineTo(545, y).stroke();
+    /* ===== TABLA ===== */
 
-    y += 15;
+    let startY = doc.y;
+    const rowHeight = 25;
 
-    /* ====== TOTALES DERECHA ====== */
+    const colWidths = [30, 290, 60, 80, 80];
 
-    doc.font("Helvetica-Bold").fontSize(12);
+    const headers = ["#", "DESCRIPCIÓN", "CANT.", "COSTO UNIT.", "SUBTOTAL"];
 
-    doc.text(`TOTAL: ${formatearMoneda(compra.total)}`, 350, y, {
-      align: "right",
-      width: 195,
-    });
+    const tableWidth = colWidths.reduce((a, b) => a + b, 0);
 
-    y += 20;
-
-    doc.text(`SALDO: ${formatearMoneda(compra.saldo)}`, 350, y, {
-      align: "right",
-      width: 195,
-    });
-
-    doc.moveDown(3);
-
-    /* ====== PIE CON HORA LOCAL ====== */
-
-    const fechaImpresion = formatearFechaHoraCortaBO(new Date());
-
+    // Header gris
     doc
-      .font("Helvetica") // mismo font que antes
-      .fontSize(9) // mismo tamaño
-      .text(`Impreso: ${fechaImpresion}`, 350, doc.y, {
-        width: 195, // mismo ancho que TOTAL/SALDO
-        align: "right", // alineación igual
+      .rect(margin, startY, tableWidth, rowHeight)
+      .fillAndStroke("#e6e6e6", "black");
+
+    let x = margin;
+
+    doc.font("Helvetica-Bold").fontSize(9);
+
+    headers.forEach((header, i) => {
+      doc.fillColor("black").text(header, x, startY + 7, {
+        width: colWidths[i],
+        align: "center",
       });
 
-    doc.moveDown();
+      doc.rect(x, startY, colWidths[i], rowHeight).stroke();
+      x += colWidths[i];
+    });
+
+    startY += rowHeight;
+
+    /* ===== FILAS ===== */
+
+    doc.font("Helvetica").fontSize(9);
+
+    detalle.forEach((item, index) => {
+      if (startY > doc.page.height - 120) {
+        doc.addPage();
+        startY = margin;
+      }
+
+      let xRow = margin;
+
+      const rowValues = [
+        index + 1,
+        item.producto_label,
+        item.cantidad,
+        formatBs(item.costo_unitario),
+        formatBs(item.costo_subtotal),
+      ];
+
+      rowValues.forEach((val, i) => {
+        doc.rect(xRow, startY, colWidths[i], rowHeight).stroke();
+
+        const isDescripcion = i === 1;
+
+        doc.text(val.toString(), isDescripcion ? xRow + 5 : xRow, startY + 7, {
+          width: isDescripcion ? colWidths[i] - 10 : colWidths[i],
+          align: isDescripcion ? "left" : "center",
+        });
+
+        xRow += colWidths[i];
+      });
+
+      startY += rowHeight;
+    });
+
+    /* ===== TOTAL INTEGRADO ===== */
+
+    const totalRowY = startY;
+
+    const col0 = margin;
+    const col1 = col0 + colWidths[0];
+    const col2 = col1 + colWidths[1];
+    const col3 = col2 + colWidths[2];
+    const col4 = col3 + colWidths[3];
+
+    const combinedWidth = colWidths[2] + colWidths[3];
+
+    doc.rect(col2, totalRowY, combinedWidth, rowHeight).stroke();
+
+    doc.font("Helvetica-Bold").fontSize(10);
+
+    doc.text("TOTAL BS", col2, totalRowY + 5, {
+      width: combinedWidth - 6,
+      align: "right",
+    });
+
+    doc.rect(col4, totalRowY, colWidths[4], rowHeight).stroke();
+
+    doc.text(formatBs(compra.total), col4, totalRowY + 7, {
+      width: colWidths[4],
+      align: "center",
+    });
+
+    startY += rowHeight;
+
+    /* ===== TOTAL LITERAL ===== */
+
+    doc.moveDown(1.5);
 
     doc
-      .font("Helvetica")
-      .fontSize(9)
-      .text("Documento generado electrónicamente", 350, doc.y, {
-        width: 195,
-        align: "right", // alineación igual
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .text(`Son: ${numeroALetras(compra.total)} Bolivianos`, margin, doc.y, {
+        width: tableWidth,
+        align: "right",
       });
 
     doc.end();
