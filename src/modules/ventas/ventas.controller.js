@@ -654,41 +654,41 @@ export const descargarVentaPDF = async (req, res) => {
        1️⃣ CABECERA
     ============================== */
 
+//     const [[venta]] = await pool.query(
+//       `
+// SELECT 
+//   v.codigo,
+
+// DATE_FORMAT(v.created_at - INTERVAL 4 HOUR, '%Y-%m-%d %H:%i:%s') AS created_at,
+
+//   v.total,
+//   v.saldo,
+//   v.tipo_pago,
+//   IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+
+// FROM ventas v
+// LEFT JOIN clientes c ON c.id = v.cliente_id
+
+// WHERE v.id = ?
+// `,
+//       [id],
+//     );
+
     const [[venta]] = await pool.query(
       `
-SELECT 
-  v.codigo,
-
-DATE_FORMAT(v.created_at - INTERVAL 4 HOUR, '%Y-%m-%d %H:%i:%s') AS created_at,
-
-  v.total,
-  v.saldo,
-  v.tipo_pago,
-  IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
-
-FROM ventas v
-LEFT JOIN clientes c ON c.id = v.cliente_id
-
-WHERE v.id = ?
-`,
+      SELECT
+        v.codigo,
+        v.created_at,
+        v.total,
+        v.saldo,
+        v.tipo_pago,
+        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+      FROM ventas v
+      LEFT JOIN clientes c ON c.id = v.cliente_id
+      WHERE v.id = ?
+      `,
       [id],
     );
-
-    // const [[venta]] = await pool.query(
-    //   `
-    //   SELECT
-    //     v.codigo,
-    //     v.created_at,
-    //     v.total,
-    //     v.saldo,
-    //     v.tipo_pago,
-    //     IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
-    //   FROM ventas v
-    //   LEFT JOIN clientes c ON c.id = v.cliente_id
-    //   WHERE v.id = ?
-    //   `,
-    //   [id],
-    // );
 
     if (!venta) {
       return res.status(404).json({ message: "Venta no encontrada" });
@@ -768,7 +768,25 @@ WHERE d.venta_id = ?
     doc.font("Helvetica").fontSize(10);
 
     doc.text(`Código: ${venta.codigo}`);
-    doc.text(`Fecha: ${new Date(venta.created_at).toLocaleString()}`);
+
+    const fecha = new Date(venta.created_at);
+
+    // ajustar UTC → UTC-4
+    fecha.setHours(fecha.getHours() - 4);
+
+    const fechaFormateada = fecha.toLocaleString("es-BO", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+
+    doc.text(`Fecha: ${fechaFormateada}`);
+
+    //doc.text(`Fecha: ${new Date(venta.created_at).toLocaleString()}`);
     doc.text(`Cliente: ${venta.cliente}`);
     doc.text(`Tipo de Pago: ${venta.tipo_pago}`);
 
