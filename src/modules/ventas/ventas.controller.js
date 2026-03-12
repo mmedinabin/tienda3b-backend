@@ -397,22 +397,6 @@ export const listarVentas = async (req, res) => {
     /* ==============================
        1️⃣ Query base
     =============================== */
-
-    let queryVentasrrr = `
-      SELECT 
-        v.id,
-        v.codigo,
-        v.created_at AS fecha,
-        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente,
-        v.cliente_id,
-        v.tipo_pago,
-        v.total,
-        v.saldo,
-        v.estado,
-        v.estado_pago
-      FROM ventas v
-      LEFT JOIN clientes c ON c.id = v.cliente_id
-    `;
     let queryVentas = `
   SELECT 
     v.id,
@@ -477,27 +461,35 @@ export const listarVentas = async (req, res) => {
 
     const [detalles] = await pool.query(
       `
-      SELECT 
-        vd.venta_id,
+SELECT 
+  vd.venta_id,
 
-        TRIM(
-          CONCAT(
-            IFNULL(m.nombre, ''),
-            IF(m.nombre IS NOT NULL AND m.nombre <> '', ' ', ''),
-            p.nombre,
-            IF(p.descripcion IS NOT NULL AND p.descripcion <> '', ' ', ''),
-            IFNULL(p.descripcion, '')
-          )
-        ) AS producto,
+  TRIM(
+    CONCAT(
 
-        vd.cantidad,
-        vd.precio_unitario,
-        vd.precio_subtotal
+      SUBSTRING_INDEX(p.nombre, ' ', 1),
 
-      FROM venta_detalle vd
-      INNER JOIN productos p ON p.id = vd.producto_id
-      LEFT JOIN marcas m ON m.id = p.marca_id
-      WHERE vd.venta_id IN (${placeholders})
+      IF(m.nombre IS NOT NULL AND m.nombre <> '', CONCAT(' ', m.nombre), ''),
+
+      IF(
+        LOCATE(' ', p.nombre) > 0,
+        CONCAT(' ', SUBSTRING(p.nombre, LOCATE(' ', p.nombre) + 1)),
+        ''
+      ),
+
+      IF(p.descripcion IS NOT NULL AND p.descripcion <> '', CONCAT(' ', p.descripcion), '')
+
+    )
+  ) AS producto,
+
+  vd.cantidad,
+  vd.precio_unitario,
+  vd.precio_subtotal
+
+FROM venta_detalle vd
+INNER JOIN productos p ON p.id = vd.producto_id
+LEFT JOIN marcas m ON m.id = p.marca_id
+WHERE vd.venta_id IN (${placeholders})
       `,
       ventaIds,
     );
@@ -654,25 +646,25 @@ export const descargarVentaPDF = async (req, res) => {
        1️⃣ CABECERA
     ============================== */
 
-//     const [[venta]] = await pool.query(
-//       `
-// SELECT 
-//   v.codigo,
+    //     const [[venta]] = await pool.query(
+    //       `
+    // SELECT
+    //   v.codigo,
 
-// DATE_FORMAT(v.created_at - INTERVAL 4 HOUR, '%Y-%m-%d %H:%i:%s') AS created_at,
+    // DATE_FORMAT(v.created_at - INTERVAL 4 HOUR, '%Y-%m-%d %H:%i:%s') AS created_at,
 
-//   v.total,
-//   v.saldo,
-//   v.tipo_pago,
-//   IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+    //   v.total,
+    //   v.saldo,
+    //   v.tipo_pago,
+    //   IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
 
-// FROM ventas v
-// LEFT JOIN clientes c ON c.id = v.cliente_id
+    // FROM ventas v
+    // LEFT JOIN clientes c ON c.id = v.cliente_id
 
-// WHERE v.id = ?
-// `,
-//       [id],
-//     );
+    // WHERE v.id = ?
+    // `,
+    //       [id],
+    //     );
 
     const [[venta]] = await pool.query(
       `
