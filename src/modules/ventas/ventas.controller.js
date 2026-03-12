@@ -656,19 +656,39 @@ export const descargarVentaPDF = async (req, res) => {
 
     const [[venta]] = await pool.query(
       `
-      SELECT 
-        v.codigo,
-        v.created_at,
-        v.total,
-        v.saldo,
-        v.tipo_pago,
-        IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
-      FROM ventas v
-      LEFT JOIN clientes c ON c.id = v.cliente_id
-      WHERE v.id = ?
-      `,
+SELECT 
+  v.codigo,
+
+DATE_FORMAT(v.created_at - INTERVAL 4 HOUR, '%Y-%m-%d %H:%i:%s') AS created_at,
+
+  v.total,
+  v.saldo,
+  v.tipo_pago,
+  IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+
+FROM ventas v
+LEFT JOIN clientes c ON c.id = v.cliente_id
+
+WHERE v.id = ?
+`,
       [id],
     );
+
+    // const [[venta]] = await pool.query(
+    //   `
+    //   SELECT
+    //     v.codigo,
+    //     v.created_at,
+    //     v.total,
+    //     v.saldo,
+    //     v.tipo_pago,
+    //     IFNULL(c.nombre, 'SIN NOMBRE') AS cliente
+    //   FROM ventas v
+    //   LEFT JOIN clientes c ON c.id = v.cliente_id
+    //   WHERE v.id = ?
+    //   `,
+    //   [id],
+    // );
 
     if (!venta) {
       return res.status(404).json({ message: "Venta no encontrada" });
