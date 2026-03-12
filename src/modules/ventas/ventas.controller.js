@@ -677,18 +677,39 @@ export const descargarVentaPDF = async (req, res) => {
     /* =============================
        2️⃣ DETALLE
     ============================== */
-
     const [detalle] = await pool.query(
       `
-      SELECT 
-        d.cantidad,
-        d.precio_unitario,
-        d.precio_subtotal,
-        p.nombre AS producto_label
-      FROM venta_detalle d
-      JOIN productos p ON p.id = d.producto_id
-      WHERE d.venta_id = ?
-      `,
+SELECT 
+  d.cantidad,
+  d.precio_unitario,
+  d.precio_subtotal,
+
+  TRIM(
+    CONCAT(
+      SUBSTRING_INDEX(p.nombre, ' ', 1),
+
+      IF(m.nombre IS NOT NULL AND m.nombre <> '',
+         CONCAT(' ', m.nombre),
+         ''
+      ),
+
+      ' ',
+
+      SUBSTRING(p.nombre, LENGTH(SUBSTRING_INDEX(p.nombre,' ',1)) + 1),
+
+      IF(p.descripcion IS NOT NULL AND p.descripcion <> '',
+         CONCAT(' ', p.descripcion),
+         ''
+      )
+    )
+  ) AS producto_label
+
+FROM venta_detalle d
+JOIN productos p ON p.id = d.producto_id
+LEFT JOIN marcas m ON m.id = p.marca_id
+
+WHERE d.venta_id = ?
+`,
       [id],
     );
 

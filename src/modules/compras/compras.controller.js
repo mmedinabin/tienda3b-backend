@@ -379,7 +379,19 @@ export const listarCompras = async (req, res) => {
       }
     });
 
-    const resultado = compras.map((c) => comprasMap[c.id]);
+    //const resultado = compras.map((c) => comprasMap[c.id]);
+
+    const resultado = compras.map((c) => {
+      const compra = comprasMap[c.id];
+
+      const totalItems = compra.productos.length;
+
+      return {
+        ...compra,
+        total_items: totalItems,
+        producto_resumen: totalItems === 1 ? compra.productos[0] : null,
+      };
+    });
 
     res.json({ esGlobal, data: resultado });
   } catch (error) {
@@ -389,7 +401,6 @@ export const listarCompras = async (req, res) => {
     });
   }
 };
-
 /* =====================================
    FUNCION NUMERO A LETRAS (BÁSICA BS)
 ===================================== */
@@ -490,12 +501,6 @@ function numeroALetras(numero) {
   return `${convertir(entero)} ${decimal}/100`;
 }
 
-const formatBs = (n) =>
-  Number(n).toLocaleString("es-BO", {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-
 export const descargarCompraPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -522,17 +527,53 @@ export const descargarCompraPDF = async (req, res) => {
 
     const [detalle] = await pool.query(
       `
-      SELECT 
-        d.cantidad,
-        d.costo_unitario,
-        d.costo_subtotal,
-        pr.nombre AS producto_label
-      FROM compra_detalle d
-      JOIN productos pr ON pr.id = d.producto_id
-      WHERE d.compra_id = ?
-      `,
+SELECT 
+  d.cantidad,
+  d.costo_unitario,
+  d.costo_subtotal,
+
+  TRIM(
+    CONCAT(
+      SUBSTRING_INDEX(pr.nombre, ' ', 1),
+
+      IF(m.nombre IS NOT NULL AND m.nombre <> '',
+        CONCAT(' ', m.nombre),
+        ''
+      ),
+
+      ' ',
+
+      SUBSTRING(pr.nombre, LENGTH(SUBSTRING_INDEX(pr.nombre,' ',1)) + 1),
+
+      IF(pr.descripcion IS NOT NULL AND pr.descripcion <> '',
+        CONCAT(' ', pr.descripcion),
+        ''
+      )
+    )
+  ) AS producto_label
+
+FROM compra_detalle d
+JOIN productos pr ON pr.id = d.producto_id
+LEFT JOIN marcas m ON m.id = pr.marca_id
+
+WHERE d.compra_id = ?
+`,
       [id],
     );
+
+    // const [detalle] = await pool.query(
+    //   `
+    //   SELECT
+    //     d.cantidad,
+    //     d.costo_unitario,
+    //     d.costo_subtotal,
+    //     pr.nombre AS producto_label
+    //   FROM compra_detalle d
+    //   JOIN productos pr ON pr.id = d.producto_id
+    //   WHERE d.compra_id = ?
+    //   `,
+    //   [id],
+    // );
 
     /* ===== CONFIG ===== */
 
