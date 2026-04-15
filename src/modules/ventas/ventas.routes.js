@@ -2,11 +2,17 @@ import { Router } from 'express';
 import authMiddleware from '../../middlewares/auth.middleware.js';
 import { checkPermiso } from '../../middlewares/permisos.middleware.js';
 import { sucursalContext } from '../../middlewares/sucursal.middleware.js'
-import { crearVenta, listarVentas, descargarVentaPDF,anularVenta} from './ventas.controller.js';
+import { crearVenta,obtenerVenta, listarVentas, descargarVentaPDF,anularVenta, reemplazarVenta} from './ventas.controller.js';
 
 const router = Router();
 
 router.get('/', authMiddleware, sucursalContext, listarVentas)
+router.get(
+  '/:id',
+  authMiddleware,
+  sucursalContext,
+  obtenerVenta
+);
 router.get(
   '/:id/pdf',
   authMiddleware,
@@ -23,9 +29,17 @@ router.post(
 router.put(
   '/:id/anular',
   authMiddleware,
-  checkPermiso('ventas', 'eliminar'), // 👈 SOLO quien tenga permiso
+  checkPermiso('ventas', 'eliminar'),
   sucursalContext,
   anularVenta
 );
+
+router.put(
+  '/:id/reemplazar',
+  authMiddleware,
+  checkPermiso('ventas', 'crear'),
+  sucursalContext,
+  reemplazarVenta
+)
 
 export default router;
