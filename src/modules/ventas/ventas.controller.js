@@ -1451,11 +1451,11 @@ export const obtenerVenta = async (req, res) => {
        LEFT JOIN clientes c ON c.id = v.cliente_id
        LEFT JOIN sucursales s ON s.id = v.sucursal_id
        WHERE v.id = ? AND v.sucursal_id = ?`,
-      [id, sucursalId]
+      [id, sucursalId],
     );
 
     if (!venta) {
-      return res.status(404).json({ message: 'Venta no encontrada' });
+      return res.status(404).json({ message: "Venta no encontrada" });
     }
 
     const [detalles] = await pool.query(
@@ -1464,11 +1464,30 @@ export const obtenerVenta = async (req, res) => {
          vd.cantidad,
          vd.precio_unitario,
          vd.precio_subtotal,
-         TRIM(p.nombre) AS producto
+         TRIM(
+    CONCAT(
+
+      SUBSTRING_INDEX(p.nombre, ' ', 1),
+
+      IF(m.nombre IS NOT NULL AND m.nombre <> '', CONCAT(' ', m.nombre), ''),
+
+      IF(
+        LOCATE(' ', p.nombre) > 0,
+        CONCAT(' ', SUBSTRING(p.nombre, LOCATE(' ', p.nombre) + 1)),
+        ''
+      ),
+
+      IF(p.descripcion IS NOT NULL AND p.descripcion <> '', CONCAT(' ', p.descripcion), '')
+
+    )
+  ) AS producto
+
+
        FROM venta_detalle vd
        INNER JOIN productos p ON p.id = vd.producto_id
+       LEFT JOIN marcas m ON m.id = p.marca_id
        WHERE vd.venta_id = ?`,
-      [id]
+      [id],
     );
 
     venta.productos = detalles;
@@ -1476,21 +1495,20 @@ export const obtenerVenta = async (req, res) => {
     res.json(venta);
   } catch (error) {
     console.error(error);
-    res.status(500).json({ message: 'Error al obtener venta' });
+    res.status(500).json({ message: "Error al obtener venta" });
   }
 };
 
-
 const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
-  const { cliente_id, tipo_pago, abono_inicial, productos } = body
+  const { cliente_id, tipo_pago, abono_inicial, productos } = body;
 
   if (!productos || productos.length === 0) {
-    throw new Error("No hay productos en la venta")
+    throw new Error("No hay productos en la venta");
   }
 
-  const tiposValidos = ["EFECTIVO", "TRANSFERENCIA", "CREDITO"]
+  const tiposValidos = ["EFECTIVO", "TRANSFERENCIA", "CREDITO"];
   if (!tiposValidos.includes(tipo_pago)) {
-    throw new Error("Tipo de pago inválido")
+    throw new Error("Tipo de pago inválido");
   }
 
   /* =============================
@@ -1499,8 +1517,8 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
 
   const [[sucursal]] = await conn.query(
     `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
-    [sucursalId]
-  )
+    [sucursalId],
+  );
 
   let [[row]] = await conn.query(
     `SELECT ultimo_numero
@@ -1508,29 +1526,29 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
      WHERE tipo = 'VENTA'
      AND sucursal_id = ?
      FOR UPDATE`,
-    [sucursalId]
-  )
+    [sucursalId],
+  );
 
   if (!row) {
     await conn.query(
       `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
        VALUES ('VENTA', ?, 0)`,
-      [sucursalId]
-    )
-    row = { ultimo_numero: 0 }
+      [sucursalId],
+    );
+    row = { ultimo_numero: 0 };
   }
 
-  const siguienteNumero = row.ultimo_numero + 1
+  const siguienteNumero = row.ultimo_numero + 1;
 
   await conn.query(
     `UPDATE secuencias
      SET ultimo_numero = ?
      WHERE tipo = 'VENTA'
      AND sucursal_id = ?`,
-    [siguienteNumero, sucursalId]
-  )
+    [siguienteNumero, sucursalId],
+  );
 
-  const codigo = `V-${sucursal.codigo_sucursal}-${String(siguienteNumero).padStart(5, "0")}`
+  const codigo = `V-${sucursal.codigo_sucursal}-${String(siguienteNumero).padStart(5, "0")}`;
 
   /* =============================
      2. TOTAL
@@ -1538,17 +1556,17 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
 
   const totalVenta = productos.reduce(
     (acc, p) => acc + Number(p.cantidad) * Number(p.precio_venta),
-    0
-  )
+    0,
+  );
 
-  if (totalVenta <= 0) throw new Error("Total inválido")
+  if (totalVenta <= 0) throw new Error("Total inválido");
 
-  let abono = Number(abono_inicial || 0)
+  let abono = Number(abono_inicial || 0);
 
-  if (tipo_pago !== "CREDITO") abono = totalVenta
+  if (tipo_pago !== "CREDITO") abono = totalVenta;
 
-  const saldo = totalVenta - abono
-  const estado_pago = saldo > 0 ? "PENDIENTE" : "PAGADO"
+  const saldo = totalVenta - abono;
+  const estado_pago = saldo > 0 ? "PENDIENTE" : "PAGADO";
 
   /* =============================
      3. INSERT VENTA
@@ -1570,22 +1588,22 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
       totalVenta,
       saldo,
       usuarioId,
-      nowUTC
-    ]
-  )
+      nowUTC,
+    ],
+  );
 
-  const ventaId = ventaRes.insertId
+  const ventaId = ventaRes.insertId;
 
   /* =============================
      4. DETALLE (STOCK + KARDEX)
   ============================= */
 
-  let utilidadTotal = 0
+  let utilidadTotal = 0;
 
   for (const p of productos) {
-    const productoId = Number(p.producto_id)
-    const cantidad = Number(p.cantidad)
-    const precio = Number(p.precio_venta)
+    const productoId = Number(p.producto_id);
+    const cantidad = Number(p.cantidad);
+    const precio = Number(p.precio_venta);
 
     const [[stockRow]] = await conn.query(
       `SELECT cantidad
@@ -1593,11 +1611,11 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
        WHERE producto_id = ?
        AND sucursal_id = ?
        FOR UPDATE`,
-      [productoId, sucursalId]
-    )
+      [productoId, sucursalId],
+    );
 
     if (!stockRow || stockRow.cantidad < cantidad) {
-      throw new Error(`Stock insuficiente producto ${productoId}`)
+      throw new Error(`Stock insuficiente producto ${productoId}`);
     }
 
     /* stock */
@@ -1605,19 +1623,19 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
       `UPDATE stock
        SET cantidad = cantidad - ?, updated_at = ?
        WHERE producto_id = ? AND sucursal_id = ?`,
-      [cantidad, nowUTC, productoId, sucursalId]
-    )
+      [cantidad, nowUTC, productoId, sucursalId],
+    );
 
     /* detalle */
     await conn.query(
       `INSERT INTO venta_detalle
        (venta_id, producto_id, cantidad, precio_unitario, precio_subtotal)
        VALUES (?, ?, ?, ?, ?)`,
-      [ventaId, productoId, cantidad, precio, cantidad * precio]
-    )
+      [ventaId, productoId, cantidad, precio, cantidad * precio],
+    );
 
     /* utilidad simple */
-    utilidadTotal += cantidad * precio
+    utilidadTotal += cantidad * precio;
   }
 
   /* =============================
@@ -1628,27 +1646,27 @@ const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
     `UPDATE ventas
      SET utilidad_total = ?
      WHERE id = ?`,
-    [utilidadTotal, ventaId]
-  )
+    [utilidadTotal, ventaId],
+  );
 
-  return { id: ventaId, codigo }
-}
+  return { id: ventaId, codigo };
+};
 
 const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
   const [[venta]] = await conn.query(
     `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
-    [ventaId]
-  )
+    [ventaId],
+  );
 
-  if (!venta) throw new Error("Venta no encontrada")
-  if (venta.estado === "ANULADA") throw new Error("Ya anulada")
+  if (!venta) throw new Error("Venta no encontrada");
+  if (venta.estado === "ANULADA") throw new Error("Ya anulada");
 
-  const sucursalId = venta.sucursal_id
+  const sucursalId = venta.sucursal_id;
 
   const [detalles] = await conn.query(
     `SELECT * FROM venta_detalle WHERE venta_id = ?`,
-    [ventaId]
-  )
+    [ventaId],
+  );
 
   for (const d of detalles) {
     /* devolver stock */
@@ -1656,8 +1674,8 @@ const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
       `UPDATE stock
        SET cantidad = cantidad + ?
        WHERE producto_id = ? AND sucursal_id = ?`,
-      [d.cantidad, d.producto_id, sucursalId]
-    )
+      [d.cantidad, d.producto_id, sucursalId],
+    );
   }
 
   /* marcar anulada */
@@ -1668,9 +1686,9 @@ const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
          anulada_by = ?,
          anulada_at = ?
      WHERE id = ?`,
-    [motivo, usuarioId, nowUTC, ventaId]
-  )
-}
+    [motivo, usuarioId, nowUTC, ventaId],
+  );
+};
 
 // export const reemplazarVenta = async (req, res) => {
 //   const conn = await pool.getConnection()
@@ -1716,34 +1734,34 @@ const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
 // }
 
 export const reemplazarVenta = async (req, res) => {
-  const conn = await pool.getConnection()
+  const conn = await pool.getConnection();
 
   try {
-    await conn.beginTransaction()
+    await conn.beginTransaction();
 
-    const nowUTC = getUTCDateTime()
-    const usuarioId = req.user?.id
-    const sucursalId = req.sucursalActiva
-    const ventaEditId = req.params.id
+    const nowUTC = getUTCDateTime();
+    const usuarioId = req.user?.id;
+    const sucursalId = req.sucursalActiva;
+    const ventaEditId = req.params.id;
 
     /* =====================================================
        1. TRAER VENTA ACTUAL
     ====================================================== */
     const [[ventaActual]] = await conn.query(
       `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
-      [ventaEditId]
-    )
+      [ventaEditId],
+    );
 
-    if (!ventaActual) throw new Error("Venta no encontrada")
-    if (ventaActual.estado === "ANULADA") throw new Error("Venta ya anulada")
+    if (!ventaActual) throw new Error("Venta no encontrada");
+    if (ventaActual.estado === "ANULADA") throw new Error("Venta ya anulada");
 
     /* =====================================================
        2. DEFINIR ORIGEN REAL
        (IMPORTANTE PARA VERSIONADO)
     ====================================================== */
 
-    const ventaOrigenId = ventaActual.venta_origen_id || ventaActual.id
-    const nuevaVersion = (ventaActual.version || 1) + 1
+    const ventaOrigenId = ventaActual.venta_origen_id || ventaActual.id;
+    const nuevaVersion = (ventaActual.version || 1) + 1;
 
     /* =====================================================
        3. ANULAR VENTA ACTUAL
@@ -1753,8 +1771,8 @@ export const reemplazarVenta = async (req, res) => {
       ventaEditId,
       "Edición de venta",
       usuarioId,
-      nowUTC
-    )
+      nowUTC,
+    );
 
     /* =====================================================
        4. CREAR NUEVA VENTA (CLONADA)
@@ -1765,8 +1783,8 @@ export const reemplazarVenta = async (req, res) => {
       req.body,
       sucursalId,
       usuarioId,
-      nowUTC
-    )
+      nowUTC,
+    );
 
     /* =====================================================
        5. ACTUALIZAR VERSIONAMIENTO
@@ -1777,63 +1795,57 @@ export const reemplazarVenta = async (req, res) => {
        SET venta_origen_id = ?,
            version = ?
        WHERE id = ?`,
-      [
-        ventaOrigenId,
-        nuevaVersion,
-        nuevaVenta.id
-      ]
-    )
+      [ventaOrigenId, nuevaVersion, nuevaVenta.id],
+    );
 
-    await conn.commit()
+    await conn.commit();
 
     res.json({
       message: "Venta reemplazada correctamente",
       ventaId: nuevaVenta.id,
       codigo: nuevaVenta.codigo,
       version: nuevaVersion,
-      origen: ventaOrigenId
-    })
-
+      origen: ventaOrigenId,
+    });
   } catch (error) {
-    await conn.rollback()
+    await conn.rollback();
 
-    console.error(error)
+    console.error(error);
 
     res.status(400).json({
-      message: error.message || "Error al reemplazar venta"
-    })
+      message: error.message || "Error al reemplazar venta",
+    });
   } finally {
-    conn.release()
+    conn.release();
   }
-}
+};
 
 export const crearVenta = async (req, res) => {
-  const conn = await pool.getConnection()
+  const conn = await pool.getConnection();
 
   try {
-    await conn.beginTransaction()
+    await conn.beginTransaction();
 
-    const nowUTC = getUTCDateTime()
+    const nowUTC = getUTCDateTime();
 
     const result = await crearVentaInterna(
       conn,
       req.body,
       req.sucursalActiva,
       req.user?.id,
-      nowUTC
-    )
+      nowUTC,
+    );
 
-    await conn.commit()
+    await conn.commit();
 
     res.status(201).json({
       message: "Venta creada",
-      ...result
-    })
-
+      ...result,
+    });
   } catch (error) {
-    await conn.rollback()
-    res.status(400).json({ message: error.message })
+    await conn.rollback();
+    res.status(400).json({ message: error.message });
   } finally {
-    conn.release()
+    conn.release();
   }
-}
+};
