@@ -318,9 +318,14 @@ export const listarCompras = async (req, res) => {
       params.push(sucursalId);
     }
 
+    // queryCompras += `
+    //   ORDER BY c.fecha_compra DESC
+    //   LIMIT ${esGlobal ? 50 : 25}
+    // `;
+
     queryCompras += `
-      ORDER BY c.fecha_compra DESC
-      LIMIT ${esGlobal ? 50 : 25}
+      ORDER BY c.codigo DESC
+      LIMIT ${esGlobal ? 100 : 100}
     `;
 
     const [compras] = await pool.query(queryCompras, params);
@@ -959,7 +964,7 @@ export const anularCompra = async (req, res) => {
   const { motivo } = req.body;
   const usuarioId = req.user?.id;
 
-  if (sucursalId === null || sucursalId === undefined) {
+  if (sucursalId == null) {
     return res.status(400).json({
       message: "Debe seleccionar una sucursal específica para anular la compra",
     });
@@ -986,7 +991,6 @@ export const anularCompra = async (req, res) => {
     /* ==============================
        1️⃣ OBTENER COMPRA
     ============================== */
-
     const [[compra]] = await conn.query(
       `SELECT * FROM compras
        WHERE id = ? AND sucursal_id = ?
@@ -996,31 +1000,37 @@ export const anularCompra = async (req, res) => {
 
     if (!compra) throw new Error("Compra no encontrada");
 
-    if (compra.estado === "ANULADA")
+    if (compra.estado === "ANULADA") {
       throw new Error("La compra ya está anulada");
+    }
 
     /* ==============================
        2️⃣ OBTENER DETALLE
     ============================== */
-
     const [detalles] = await conn.query(
       `SELECT * FROM compra_detalle
        WHERE compra_id = ?`,
       [id],
     );
 
-    if (detalles.length === 0) throw new Error("Compra sin detalle");
+    if (detalles.length === 0) {
+      throw new Error("Compra sin detalle");
+    }
 
     /* ==============================
-       3️⃣ VALIDAR LOTES (CLAVE)
+       3️⃣ VALIDAR LOTES (INTACTOS)
     ============================== */
-
     const [lotes] = await conn.query(
       `SELECT cantidad_inicial, cantidad_actual, compra_detalle_id
        FROM lotes
-       WHERE compra_detalle_id IN (?)`,
+       WHERE compra_detalle_id IN (?)
+       FOR UPDATE`,
       [detalles.map((d) => d.id)],
     );
+
+    if (lotes.length !== detalles.length) {
+      throw new Error("Inconsistencia: faltan lotes asociados a la compra");
+    }
 
     const puedeAnular = lotes.every(
       (l) => Number(l.cantidad_actual) === Number(l.cantidad_inicial),
@@ -1028,18 +1038,17 @@ export const anularCompra = async (req, res) => {
 
     if (!puedeAnular) {
       throw new Error(
-        "No se puede anular la compra porque ya existe consumo en los lotes",
+        "No se puede anular la compra porque ya existe ventas asociadas",
       );
     }
 
     /* ==============================
-       4️⃣ REVERSIÓN (YA ES SEGURO)
+       4️⃣ REVERSIÓN
     ============================== */
-
     for (const d of detalles) {
       const subtotal = Number(d.costo_subtotal);
 
-      // 🔹 RESTAR STOCK GLOBAL (según tu modelo)
+      // 🔹 ACTUALIZAR STOCK (RESUMEN)
       await conn.query(
         `UPDATE stock
          SET cantidad = cantidad - ?, updated_at = ?
@@ -1047,15 +1056,15 @@ export const anularCompra = async (req, res) => {
         [d.cantidad, nowUTC, d.producto_id, sucursalId],
       );
 
-      // 🔹 AJUSTAR LOTE (regresa a 0 consumo)
+      // 🔹 LOTE: ELIMINAR DEL INVENTARIO (FUENTE REAL)
       await conn.query(
         `UPDATE lotes
-         SET cantidad_actual = cantidad_inicial
+         SET cantidad_actual = 0
          WHERE compra_detalle_id = ?`,
         [d.id],
       );
 
-      // 🔹 KARDEX (SALIDA POR ANULACIÓN)
+      // 🔹 OBTENER ÚLTIMO SALDO KARDEX
       const [[ultimo]] = await conn.query(
         `SELECT saldo_cantidad, saldo_total
          FROM kardex
@@ -1065,12 +1074,13 @@ export const anularCompra = async (req, res) => {
         [d.producto_id, sucursalId],
       );
 
-      const saldoAnteriorCantidad = ultimo?.saldo_cantidad || 0;
+      const saldoAnteriorCantidad = Number(ultimo?.saldo_cantidad || 0);
       const saldoAnteriorTotal = Number(ultimo?.saldo_total || 0);
 
       const nuevoSaldoCantidad = saldoAnteriorCantidad - d.cantidad;
-      const nuevoSaldoTotal = saldoAnteriorTotal - Number(d.costo_subtotal);
+      const nuevoSaldoTotal = saldoAnteriorTotal - subtotal;
 
+      // 🔹 INSERT KARDEX (SALIDA)
       await conn.query(
         `INSERT INTO kardex
          (producto_id, sucursal_id,
@@ -1082,10 +1092,10 @@ export const anularCompra = async (req, res) => {
         [
           d.producto_id,
           sucursalId,
-          compra.codigo + " (ANULACION COMPRA)",
+          `${compra.codigo} (ANULACION COMPRA)`,
           d.cantidad,
           d.costo_unitario,
-          d.costo_subtotal,
+          subtotal,
           nuevoSaldoCantidad,
           nuevoSaldoTotal,
           nowUTC,
@@ -1096,7 +1106,6 @@ export const anularCompra = async (req, res) => {
     /* ==============================
        5️⃣ ANULAR PAGOS
     ============================== */
-
     await conn.query(
       `UPDATE compra_pagos
        SET estado = 'ANULADO'
@@ -1107,7 +1116,6 @@ export const anularCompra = async (req, res) => {
     /* ==============================
        6️⃣ ACTUALIZAR COMPRA
     ============================== */
-
     await conn.query(
       `UPDATE compras
        SET estado = 'ANULADA',
@@ -1123,7 +1131,6 @@ export const anularCompra = async (req, res) => {
     /* ==============================
        7️⃣ AUDITORÍA
     ============================== */
-
     await conn.query(
       `INSERT INTO auditoria
        (tabla, registro_id, accion,
@@ -1149,6 +1156,7 @@ export const anularCompra = async (req, res) => {
     });
   } catch (error) {
     await conn.rollback();
+
     return res.status(400).json({
       message: error.message || "Error al anular compra",
     });
