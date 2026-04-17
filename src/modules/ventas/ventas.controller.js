@@ -436,7 +436,7 @@ export const listarVentas = async (req, res) => {
 
     queryVentas += `
       ORDER BY v.created_at DESC
-      LIMIT ${esGlobal ? 50 : 25}
+      LIMIT ${esGlobal ? 150: 150}
     `;
 
     const [ventas] = await pool.query(queryVentas, params);
