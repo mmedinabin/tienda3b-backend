@@ -1188,6 +1188,657 @@ export const descargarVentaPDFticket = async (req, res) => {
   }
 };
 
+export const obtenerVenta = async (req, res) => {
+  const { id } = req.params;
+  const sucursalId = req.sucursalActiva;
+
+  try {
+    const [[venta]] = await pool.query(
+      `SELECT 
+         v.*,
+         c.nombre AS cliente,
+         s.nombre AS sucursal
+       FROM ventas v
+       LEFT JOIN clientes c ON c.id = v.cliente_id
+       LEFT JOIN sucursales s ON s.id = v.sucursal_id
+       WHERE v.id = ? AND v.sucursal_id = ?`,
+      [id, sucursalId],
+    );
+
+    if (!venta) {
+      return res.status(404).json({ message: "Venta no encontrada" });
+    }
+
+    const [detalles] = await pool.query(
+      `SELECT 
+         vd.producto_id,
+         vd.cantidad,
+         vd.precio_unitario,
+         vd.precio_subtotal,
+         TRIM(
+    CONCAT(
+
+      SUBSTRING_INDEX(p.nombre, ' ', 1),
+
+      IF(m.nombre IS NOT NULL AND m.nombre <> '', CONCAT(' ', m.nombre), ''),
+
+      IF(
+        LOCATE(' ', p.nombre) > 0,
+        CONCAT(' ', SUBSTRING(p.nombre, LOCATE(' ', p.nombre) + 1)),
+        ''
+      ),
+
+      IF(p.descripcion IS NOT NULL AND p.descripcion <> '', CONCAT(' ', p.descripcion), '')
+
+    )
+  ) AS producto
+
+
+       FROM venta_detalle vd
+       INNER JOIN productos p ON p.id = vd.producto_id
+       LEFT JOIN marcas m ON m.id = p.marca_id
+       WHERE vd.venta_id = ?`,
+      [id],
+    );
+
+    venta.productos = detalles;
+
+    res.json(venta);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: "Error al obtener venta" });
+  }
+};
+
+const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
+  const { cliente_id, tipo_pago, abono_inicial, productos } = body;
+
+  if (!productos || productos.length === 0) {
+    throw new Error("No hay productos en la venta");
+  }
+
+  const tiposValidos = ["EFECTIVO", "TRANSFERENCIA", "CREDITO"];
+  if (!tiposValidos.includes(tipo_pago)) {
+    throw new Error("Tipo de pago inválido");
+  }
+
+  /* =====================================================
+     1. SUCURSAL + CÓDIGO
+  ====================================================== */
+
+  const [[sucursal]] = await conn.query(
+    `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
+    [sucursalId],
+  );
+
+  if (!sucursal) throw new Error("Sucursal inválida");
+
+  let [[row]] = await conn.query(
+    `SELECT ultimo_numero
+     FROM secuencias
+     WHERE tipo = 'VENTA'
+     AND sucursal_id = ?
+     FOR UPDATE`,
+    [sucursalId],
+  );
+
+  if (!row) {
+    await conn.query(
+      `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
+       VALUES ('VENTA', ?, 0)`,
+      [sucursalId],
+    );
+    row = { ultimo_numero: 0 };
+  }
+
+  const siguienteNumero = row.ultimo_numero + 1;
+
+  await conn.query(
+    `UPDATE secuencias
+     SET ultimo_numero = ?
+     WHERE tipo = 'VENTA'
+     AND sucursal_id = ?`,
+    [siguienteNumero, sucursalId],
+  );
+
+  const codigo = `V-${sucursal.codigo_sucursal}-${String(
+    siguienteNumero,
+  ).padStart(5, "0")}`;
+
+  /* =====================================================
+     2. TOTAL / PAGO
+  ====================================================== */
+
+  const totalVenta = productos.reduce(
+    (acc, p) => acc + Number(p.cantidad) * Number(p.precio_venta),
+    0,
+  );
+
+  if (totalVenta <= 0) throw new Error("Total inválido");
+
+  let abono = Number(abono_inicial || 0);
+  if (tipo_pago !== "CREDITO") abono = totalVenta;
+
+  const saldo = totalVenta - abono;
+  const estado_pago = saldo > 0 ? "PENDIENTE" : "PAGADO";
+
+  /* =====================================================
+     3. INSERT VENTA
+  ====================================================== */
+
+  const [ventaRes] = await conn.query(
+    `INSERT INTO ventas
+     (codigo, sucursal_id, cliente_id,
+      tipo_pago, estado_pago,
+      total, saldo,
+      created_by, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      codigo,
+      sucursalId,
+      cliente_id || null,
+      tipo_pago,
+      estado_pago,
+      totalVenta,
+      saldo,
+      usuarioId,
+      nowUTC,
+    ],
+  );
+
+  const ventaId = ventaRes.insertId;
+
+  /* =====================================================
+     4. FIFO + STOCK + KARDEX + UTILIDAD REAL
+  ====================================================== */
+
+  let utilidadTotal = 0;
+
+  for (const p of productos) {
+    const productoId = Number(p.producto_id);
+    const cantidadVenta = Number(p.cantidad);
+    const precioVenta = Number(p.precio_venta);
+
+    if (cantidadVenta <= 0 || precioVenta <= 0) {
+      throw new Error("Cantidad o precio inválido");
+    }
+
+    /* LOCK STOCK */
+    const [[stockRow]] = await conn.query(
+      `SELECT cantidad
+       FROM stock
+       WHERE producto_id = ?
+       AND sucursal_id = ?
+       FOR UPDATE`,
+      [productoId, sucursalId],
+    );
+
+    if (!stockRow || stockRow.cantidad < cantidadVenta) {
+      throw new Error(`Stock insuficiente producto ${productoId}`);
+    }
+
+    /* INSERT DETALLE */
+    const [detalleRes] = await conn.query(
+      `INSERT INTO venta_detalle
+       (venta_id, producto_id, cantidad,
+        precio_unitario, precio_subtotal)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        ventaId,
+        productoId,
+        cantidadVenta,
+        precioVenta,
+        cantidadVenta * precioVenta,
+      ],
+    );
+
+    const detalleId = detalleRes.insertId;
+
+    /* ================= FIFO ================= */
+
+    let cantidadRestante = cantidadVenta;
+    let costoTotalProducto = 0;
+
+    const [lotes] = await conn.query(
+      `SELECT *
+       FROM lotes
+       WHERE producto_id = ?
+       AND sucursal_id = ?
+       AND cantidad_actual > 0
+       ORDER BY created_at ASC
+       FOR UPDATE`,
+      [productoId, sucursalId],
+    );
+
+    for (const lote of lotes) {
+      if (cantidadRestante <= 0) break;
+
+      const disponible = Number(lote.cantidad_actual);
+      const consumir = Math.min(disponible, cantidadRestante);
+
+      const subtotalCosto = consumir * Number(lote.costo_unitario);
+
+      await conn.query(
+        `INSERT INTO venta_lotes
+         (venta_detalle_id, lote_id,
+          cantidad, costo_unitario,
+          subtotal_costo, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [
+          detalleId,
+          lote.id,
+          consumir,
+          lote.costo_unitario,
+          subtotalCosto,
+          nowUTC,
+        ],
+      );
+
+      await conn.query(
+        `UPDATE lotes
+         SET cantidad_actual = cantidad_actual - ?
+         WHERE id = ?`,
+        [consumir, lote.id],
+      );
+
+      cantidadRestante -= consumir;
+      costoTotalProducto += subtotalCosto;
+    }
+
+    if (cantidadRestante > 0) {
+      throw new Error(`Stock insuficiente en lotes producto ${productoId}`);
+    }
+
+    /* STOCK GENERAL */
+    await conn.query(
+      `UPDATE stock
+       SET cantidad = cantidad - ?, updated_at = ?
+       WHERE producto_id = ? AND sucursal_id = ?`,
+      [cantidadVenta, nowUTC, productoId, sucursalId],
+    );
+
+    /* KARDEX */
+    const [[ultimo]] = await conn.query(
+      `SELECT saldo_cantidad, saldo_total
+       FROM kardex
+       WHERE producto_id = ?
+       AND sucursal_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [productoId, sucursalId],
+    );
+
+    const saldoAnteriorCantidad = ultimo?.saldo_cantidad || 0;
+    const saldoAnteriorTotal = Number(ultimo?.saldo_total || 0);
+
+    const nuevoSaldoCantidad = saldoAnteriorCantidad - cantidadVenta;
+    const nuevoSaldoTotal = saldoAnteriorTotal - costoTotalProducto;
+
+    if (nuevoSaldoCantidad < 0) {
+      throw new Error("Saldo negativo en kardex");
+    }
+
+    const costoUnitarioPromedio =
+      cantidadVenta > 0 ? costoTotalProducto / cantidadVenta : 0;
+
+    await conn.query(
+      `INSERT INTO kardex
+       (producto_id, sucursal_id,
+        tipo, referencia,
+        cantidad, costo_unitario,
+        total, saldo_cantidad,
+        saldo_total, created_at)
+       VALUES (?, ?, 'SALIDA', ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        productoId,
+        sucursalId,
+        codigo,
+        cantidadVenta,
+        costoUnitarioPromedio,
+        costoTotalProducto,
+        nuevoSaldoCantidad,
+        nuevoSaldoTotal,
+        nowUTC,
+      ],
+    );
+
+    /* UTILIDAD REAL */
+    const ingreso = cantidadVenta * precioVenta;
+    utilidadTotal += ingreso - costoTotalProducto;
+  }
+
+  /* =====================================================
+     5. UPDATE UTILIDAD
+  ====================================================== */
+
+  await conn.query(
+    `UPDATE ventas
+     SET utilidad_total = ?
+     WHERE id = ?`,
+    [utilidadTotal, ventaId],
+  );
+
+  /* =====================================================
+     6. PAGOS CLIENTE (opcional)
+  ====================================================== */
+
+  if (abono > 0) {
+    await conn.query(
+      `INSERT INTO cliente_pagos
+       (venta_id, monto, fecha, created_at)
+       VALUES (?, ?, ?, ?)`,
+      [ventaId, abono, nowUTC.split(" ")[0], nowUTC],
+    );
+  }
+
+  return { id: ventaId, codigo, utilidadTotal };
+};
+
+const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
+  /* =====================================================
+     1. BLOQUEAR VENTA
+  ====================================================== */
+
+  const [[venta]] = await conn.query(
+    `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
+    [ventaId],
+  );
+
+  if (!venta) throw new Error("Venta no encontrada");
+  if (venta.estado === "ANULADA") throw new Error("Venta ya anulada");
+
+  const sucursalId = venta.sucursal_id;
+  const codigoVenta = venta.codigo;
+
+  /* =====================================================
+     2. OBTENER MOVIMIENTOS FIFO
+  ====================================================== */
+
+  const [movimientos] = await conn.query(
+    `SELECT 
+        vd.id AS detalle_id,
+        vd.producto_id,
+        vl.lote_id,
+        vl.cantidad,
+        vl.subtotal_costo
+     FROM venta_detalle vd
+     JOIN venta_lotes vl ON vl.venta_detalle_id = vd.id
+     WHERE vd.venta_id = ?
+     FOR UPDATE`,
+    [ventaId],
+  );
+
+  if (!movimientos.length) {
+    throw new Error("No hay movimientos para revertir");
+  }
+
+  /* =====================================================
+     3. AGRUPAR POR PRODUCTO
+  ====================================================== */
+
+  const resumen = {};
+
+  for (const m of movimientos) {
+    const pid = m.producto_id;
+
+    if (!resumen[pid]) {
+      resumen[pid] = { cantidad: 0, costo: 0 };
+    }
+
+    resumen[pid].cantidad += Number(m.cantidad);
+    resumen[pid].costo += Number(m.subtotal_costo);
+  }
+
+  /* =====================================================
+     4. DEVOLVER A LOTES (FIFO REVERSO EXACTO)
+  ====================================================== */
+
+  for (const m of movimientos) {
+    await conn.query(
+      `UPDATE lotes
+       SET cantidad_actual = cantidad_actual + ?
+       WHERE id = ?`,
+      [m.cantidad, m.lote_id],
+    );
+  }
+
+  /* =====================================================
+     5. DEVOLVER STOCK GENERAL
+  ====================================================== */
+
+  for (const pid of Object.keys(resumen)) {
+    await conn.query(
+      `UPDATE stock
+       SET cantidad = cantidad + ?,
+           updated_at = ?
+       WHERE producto_id = ?
+       AND sucursal_id = ?`,
+      [resumen[pid].cantidad, nowUTC, pid, sucursalId],
+    );
+  }
+
+  /* =====================================================
+     6. REVERTIR KARDEX (ENTRADA INVERSA)
+  ====================================================== */
+
+  for (const pid of Object.keys(resumen)) {
+    const cantidad = resumen[pid].cantidad;
+    const costo = resumen[pid].costo;
+
+    const [[ultimo]] = await conn.query(
+      `SELECT saldo_cantidad, saldo_total
+       FROM kardex
+       WHERE producto_id = ?
+       AND sucursal_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [pid, sucursalId],
+    );
+
+    const saldoCant = ultimo?.saldo_cantidad || 0;
+    const saldoTot = Number(ultimo?.saldo_total || 0);
+
+    const nuevoSaldoCantidad = saldoCant + cantidad;
+    const nuevoSaldoTotal = saldoTot + costo;
+
+    const costoUnit = cantidad > 0 ? costo / cantidad : 0;
+
+    await conn.query(
+      `INSERT INTO kardex
+       (producto_id, sucursal_id,
+        tipo, referencia,
+        cantidad, costo_unitario,
+        total, saldo_cantidad,
+        saldo_total, created_at)
+       VALUES (?, ?, 'ENTRADA', ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        pid,
+        sucursalId,
+        `ANULACION VENTA ${codigoVenta}`,
+        cantidad,
+        costoUnit,
+        costo,
+        nuevoSaldoCantidad,
+        nuevoSaldoTotal,
+        nowUTC,
+      ],
+    );
+  }
+
+  /* =====================================================
+     7. REVERTIR PAGOS
+  ====================================================== */
+
+  const [pagos] = await conn.query(
+    `SELECT monto FROM cliente_pagos WHERE venta_id = ?`,
+    [ventaId],
+  );
+
+  for (const p of pagos) {
+    await conn.query(
+      `INSERT INTO cliente_pagos
+       (venta_id, monto, fecha, created_at)
+       VALUES (?, ?, ?, ?)`,
+      [ventaId, -Number(p.monto), nowUTC.split(" ")[0], nowUTC],
+    );
+  }
+
+  /* =====================================================
+     8. MARCAR VENTA ANULADA
+  ====================================================== */
+
+  await conn.query(
+    `UPDATE ventas
+     SET estado = 'ANULADA',
+         estado_pago = 'PENDIENTE',
+         saldo = 0,
+         utilidad_total = 0,
+         motivo_anulacion = ?,
+         anulada_by = ?,
+         anulada_at = ?,
+         updated_at = ?
+     WHERE id = ?`,
+    [motivo, usuarioId, nowUTC, nowUTC, ventaId],
+  );
+
+  /* =====================================================
+     9. AUDITORÍA
+  ====================================================== */
+
+  await conn.query(
+    `INSERT INTO auditoria
+     (tabla, registro_id, accion, detalle, usuario_id, created_at)
+     VALUES (?, ?, 'ANULACION', ?, ?, ?)`,
+    [
+      "ventas",
+      ventaId,
+      JSON.stringify({
+        codigo: codigoVenta,
+        motivo,
+      }),
+      usuarioId,
+      nowUTC,
+    ],
+  );
+
+  return { ok: true, codigo: codigoVenta };
+};
+
+export const reemplazarVenta = async (req, res) => {
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const nowUTC = getUTCDateTime();
+    const usuarioId = req.user?.id;
+    const sucursalId = req.sucursalActiva;
+    const ventaEditId = req.params.id;
+
+    /* =====================================================
+       1. TRAER VENTA ACTUAL
+    ====================================================== */
+    const [[ventaActual]] = await conn.query(
+      `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
+      [ventaEditId],
+    );
+
+    if (!ventaActual) throw new Error("Venta no encontrada");
+    if (ventaActual.estado === "ANULADA") throw new Error("Venta ya anulada");
+
+    /* =====================================================
+       2. DEFINIR ORIGEN REAL
+       (IMPORTANTE PARA VERSIONADO)
+    ====================================================== */
+
+    const ventaOrigenId = ventaActual.venta_origen_id || ventaActual.id;
+    const nuevaVersion = (ventaActual.version || 1) + 1;
+
+    /* =====================================================
+       3. ANULAR VENTA ACTUAL
+    ====================================================== */
+    await anularVentaInterna(
+      conn,
+      ventaEditId,
+      "Edición de venta",
+      usuarioId,
+      nowUTC,
+    );
+
+    /* =====================================================
+       4. CREAR NUEVA VENTA (CLONADA)
+    ====================================================== */
+
+    const nuevaVenta = await crearVentaInterna(
+      conn,
+      req.body,
+      sucursalId,
+      usuarioId,
+      nowUTC,
+    );
+
+    /* =====================================================
+       5. ACTUALIZAR VERSIONAMIENTO
+    ====================================================== */
+
+    await conn.query(
+      `UPDATE ventas
+       SET venta_origen_id = ?,
+           version = ?
+       WHERE id = ?`,
+      [ventaOrigenId, nuevaVersion, nuevaVenta.id],
+    );
+
+    await conn.commit();
+
+    res.json({
+      message: "Venta reemplazada correctamente",
+      ventaId: nuevaVenta.id,
+      codigo: nuevaVenta.codigo,
+      version: nuevaVersion,
+      origen: ventaOrigenId,
+    });
+  } catch (error) {
+    await conn.rollback();
+
+    console.error(error);
+
+    res.status(400).json({
+      message: error.message || "Error al reemplazar venta",
+    });
+  } finally {
+    conn.release();
+  }
+};
+export const crearVenta = async (req, res) => {
+  const conn = await pool.getConnection();
+
+  try {
+    await conn.beginTransaction();
+
+    const nowUTC = getUTCDateTime();
+
+    const result = await crearVentaInterna(
+      conn,
+      req.body,
+      req.sucursalActiva,
+      req.user?.id,
+      nowUTC,
+    );
+
+    await conn.commit();
+
+    res.status(201).json({
+      message: "Venta creada",
+      ...result,
+    });
+  } catch (error) {
+    await conn.rollback();
+    res.status(400).json({ message: error.message });
+  } finally {
+    conn.release();
+  }
+};
 export const anularVenta = async (req, res) => {
   const sucursalId = req.sucursalActiva;
   const { id } = req.params;
@@ -1432,419 +2083,6 @@ export const anularVenta = async (req, res) => {
     res.status(400).json({
       message: error.message || "Error al anular venta",
     });
-  } finally {
-    conn.release();
-  }
-};
-
-export const obtenerVenta = async (req, res) => {
-  const { id } = req.params;
-  const sucursalId = req.sucursalActiva;
-
-  try {
-    const [[venta]] = await pool.query(
-      `SELECT 
-         v.*,
-         c.nombre AS cliente,
-         s.nombre AS sucursal
-       FROM ventas v
-       LEFT JOIN clientes c ON c.id = v.cliente_id
-       LEFT JOIN sucursales s ON s.id = v.sucursal_id
-       WHERE v.id = ? AND v.sucursal_id = ?`,
-      [id, sucursalId],
-    );
-
-    if (!venta) {
-      return res.status(404).json({ message: "Venta no encontrada" });
-    }
-
-    const [detalles] = await pool.query(
-      `SELECT 
-         vd.producto_id,
-         vd.cantidad,
-         vd.precio_unitario,
-         vd.precio_subtotal,
-         TRIM(
-    CONCAT(
-
-      SUBSTRING_INDEX(p.nombre, ' ', 1),
-
-      IF(m.nombre IS NOT NULL AND m.nombre <> '', CONCAT(' ', m.nombre), ''),
-
-      IF(
-        LOCATE(' ', p.nombre) > 0,
-        CONCAT(' ', SUBSTRING(p.nombre, LOCATE(' ', p.nombre) + 1)),
-        ''
-      ),
-
-      IF(p.descripcion IS NOT NULL AND p.descripcion <> '', CONCAT(' ', p.descripcion), '')
-
-    )
-  ) AS producto
-
-
-       FROM venta_detalle vd
-       INNER JOIN productos p ON p.id = vd.producto_id
-       LEFT JOIN marcas m ON m.id = p.marca_id
-       WHERE vd.venta_id = ?`,
-      [id],
-    );
-
-    venta.productos = detalles;
-
-    res.json(venta);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error al obtener venta" });
-  }
-};
-
-const crearVentaInterna = async (conn, body, sucursalId, usuarioId, nowUTC) => {
-  const { cliente_id, tipo_pago, abono_inicial, productos } = body;
-
-  if (!productos || productos.length === 0) {
-    throw new Error("No hay productos en la venta");
-  }
-
-  const tiposValidos = ["EFECTIVO", "TRANSFERENCIA", "CREDITO"];
-  if (!tiposValidos.includes(tipo_pago)) {
-    throw new Error("Tipo de pago inválido");
-  }
-
-  /* =============================
-     1. CODIGO VENTA
-  ============================= */
-
-  const [[sucursal]] = await conn.query(
-    `SELECT codigo_sucursal FROM sucursales WHERE id = ?`,
-    [sucursalId],
-  );
-
-  let [[row]] = await conn.query(
-    `SELECT ultimo_numero
-     FROM secuencias
-     WHERE tipo = 'VENTA'
-     AND sucursal_id = ?
-     FOR UPDATE`,
-    [sucursalId],
-  );
-
-  if (!row) {
-    await conn.query(
-      `INSERT INTO secuencias (tipo, sucursal_id, ultimo_numero)
-       VALUES ('VENTA', ?, 0)`,
-      [sucursalId],
-    );
-    row = { ultimo_numero: 0 };
-  }
-
-  const siguienteNumero = row.ultimo_numero + 1;
-
-  await conn.query(
-    `UPDATE secuencias
-     SET ultimo_numero = ?
-     WHERE tipo = 'VENTA'
-     AND sucursal_id = ?`,
-    [siguienteNumero, sucursalId],
-  );
-
-  const codigo = `V-${sucursal.codigo_sucursal}-${String(siguienteNumero).padStart(5, "0")}`;
-
-  /* =============================
-     2. TOTAL
-  ============================= */
-
-  const totalVenta = productos.reduce(
-    (acc, p) => acc + Number(p.cantidad) * Number(p.precio_venta),
-    0,
-  );
-
-  if (totalVenta <= 0) throw new Error("Total inválido");
-
-  let abono = Number(abono_inicial || 0);
-
-  if (tipo_pago !== "CREDITO") abono = totalVenta;
-
-  const saldo = totalVenta - abono;
-  const estado_pago = saldo > 0 ? "PENDIENTE" : "PAGADO";
-
-  /* =============================
-     3. INSERT VENTA
-  ============================= */
-
-  const [ventaRes] = await conn.query(
-    `INSERT INTO ventas
-     (codigo, sucursal_id, cliente_id,
-      tipo_pago, estado_pago,
-      total, saldo,
-      created_by, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [
-      codigo,
-      sucursalId,
-      cliente_id || null,
-      tipo_pago,
-      estado_pago,
-      totalVenta,
-      saldo,
-      usuarioId,
-      nowUTC,
-    ],
-  );
-
-  const ventaId = ventaRes.insertId;
-
-  /* =============================
-     4. DETALLE (STOCK + KARDEX)
-  ============================= */
-
-  let utilidadTotal = 0;
-
-  for (const p of productos) {
-    const productoId = Number(p.producto_id);
-    const cantidad = Number(p.cantidad);
-    const precio = Number(p.precio_venta);
-
-    const [[stockRow]] = await conn.query(
-      `SELECT cantidad
-       FROM stock
-       WHERE producto_id = ?
-       AND sucursal_id = ?
-       FOR UPDATE`,
-      [productoId, sucursalId],
-    );
-
-    if (!stockRow || stockRow.cantidad < cantidad) {
-      throw new Error(`Stock insuficiente producto ${productoId}`);
-    }
-
-    /* stock */
-    await conn.query(
-      `UPDATE stock
-       SET cantidad = cantidad - ?, updated_at = ?
-       WHERE producto_id = ? AND sucursal_id = ?`,
-      [cantidad, nowUTC, productoId, sucursalId],
-    );
-
-    /* detalle */
-    await conn.query(
-      `INSERT INTO venta_detalle
-       (venta_id, producto_id, cantidad, precio_unitario, precio_subtotal)
-       VALUES (?, ?, ?, ?, ?)`,
-      [ventaId, productoId, cantidad, precio, cantidad * precio],
-    );
-
-    /* utilidad simple */
-    utilidadTotal += cantidad * precio;
-  }
-
-  /* =============================
-     5. ACTUALIZAR UTILIDAD
-  ============================= */
-
-  await conn.query(
-    `UPDATE ventas
-     SET utilidad_total = ?
-     WHERE id = ?`,
-    [utilidadTotal, ventaId],
-  );
-
-  return { id: ventaId, codigo };
-};
-
-const anularVentaInterna = async (conn, ventaId, motivo, usuarioId, nowUTC) => {
-  const [[venta]] = await conn.query(
-    `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
-    [ventaId],
-  );
-
-  if (!venta) throw new Error("Venta no encontrada");
-  if (venta.estado === "ANULADA") throw new Error("Ya anulada");
-
-  const sucursalId = venta.sucursal_id;
-
-  const [detalles] = await conn.query(
-    `SELECT * FROM venta_detalle WHERE venta_id = ?`,
-    [ventaId],
-  );
-
-  for (const d of detalles) {
-    /* devolver stock */
-    await conn.query(
-      `UPDATE stock
-       SET cantidad = cantidad + ?
-       WHERE producto_id = ? AND sucursal_id = ?`,
-      [d.cantidad, d.producto_id, sucursalId],
-    );
-  }
-
-  /* marcar anulada */
-  await conn.query(
-    `UPDATE ventas
-     SET estado = 'ANULADA',
-         motivo_anulacion = ?,
-         anulada_by = ?,
-         anulada_at = ?
-     WHERE id = ?`,
-    [motivo, usuarioId, nowUTC, ventaId],
-  );
-};
-
-// export const reemplazarVenta = async (req, res) => {
-//   const conn = await pool.getConnection()
-
-//   try {
-//     await conn.beginTransaction()
-
-//     const nowUTC = getUTCDateTime()
-
-//     const ventaId = req.params.id
-
-//     /* 🔥 1. ANULAR ORIGINAL */
-//     await anularVentaInterna(
-//       conn,
-//       ventaId,
-//       "Edición de venta",
-//       req.user?.id,
-//       nowUTC
-//     )
-
-//     /* 🔥 2. CREAR NUEVA */
-//     const nueva = await crearVentaInterna(
-//       conn,
-//       req.body,
-//       req.sucursalActiva,
-//       req.user?.id,
-//       nowUTC
-//     )
-
-//     await conn.commit()
-
-//     res.json({
-//       message: "Venta reemplazada",
-//       ...nueva
-//     })
-
-//   } catch (error) {
-//     await conn.rollback()
-//     res.status(400).json({ message: error.message })
-//   } finally {
-//     conn.release()
-//   }
-// }
-
-export const reemplazarVenta = async (req, res) => {
-  const conn = await pool.getConnection();
-
-  try {
-    await conn.beginTransaction();
-
-    const nowUTC = getUTCDateTime();
-    const usuarioId = req.user?.id;
-    const sucursalId = req.sucursalActiva;
-    const ventaEditId = req.params.id;
-
-    /* =====================================================
-       1. TRAER VENTA ACTUAL
-    ====================================================== */
-    const [[ventaActual]] = await conn.query(
-      `SELECT * FROM ventas WHERE id = ? FOR UPDATE`,
-      [ventaEditId],
-    );
-
-    if (!ventaActual) throw new Error("Venta no encontrada");
-    if (ventaActual.estado === "ANULADA") throw new Error("Venta ya anulada");
-
-    /* =====================================================
-       2. DEFINIR ORIGEN REAL
-       (IMPORTANTE PARA VERSIONADO)
-    ====================================================== */
-
-    const ventaOrigenId = ventaActual.venta_origen_id || ventaActual.id;
-    const nuevaVersion = (ventaActual.version || 1) + 1;
-
-    /* =====================================================
-       3. ANULAR VENTA ACTUAL
-    ====================================================== */
-    await anularVentaInterna(
-      conn,
-      ventaEditId,
-      "Edición de venta",
-      usuarioId,
-      nowUTC,
-    );
-
-    /* =====================================================
-       4. CREAR NUEVA VENTA (CLONADA)
-    ====================================================== */
-
-    const nuevaVenta = await crearVentaInterna(
-      conn,
-      req.body,
-      sucursalId,
-      usuarioId,
-      nowUTC,
-    );
-
-    /* =====================================================
-       5. ACTUALIZAR VERSIONAMIENTO
-    ====================================================== */
-
-    await conn.query(
-      `UPDATE ventas
-       SET venta_origen_id = ?,
-           version = ?
-       WHERE id = ?`,
-      [ventaOrigenId, nuevaVersion, nuevaVenta.id],
-    );
-
-    await conn.commit();
-
-    res.json({
-      message: "Venta reemplazada correctamente",
-      ventaId: nuevaVenta.id,
-      codigo: nuevaVenta.codigo,
-      version: nuevaVersion,
-      origen: ventaOrigenId,
-    });
-  } catch (error) {
-    await conn.rollback();
-
-    console.error(error);
-
-    res.status(400).json({
-      message: error.message || "Error al reemplazar venta",
-    });
-  } finally {
-    conn.release();
-  }
-};
-
-export const crearVenta = async (req, res) => {
-  const conn = await pool.getConnection();
-
-  try {
-    await conn.beginTransaction();
-
-    const nowUTC = getUTCDateTime();
-
-    const result = await crearVentaInterna(
-      conn,
-      req.body,
-      req.sucursalActiva,
-      req.user?.id,
-      nowUTC,
-    );
-
-    await conn.commit();
-
-    res.status(201).json({
-      message: "Venta creada",
-      ...result,
-    });
-  } catch (error) {
-    await conn.rollback();
-    res.status(400).json({ message: error.message });
   } finally {
     conn.release();
   }

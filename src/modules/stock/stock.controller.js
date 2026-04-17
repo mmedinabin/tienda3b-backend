@@ -1,6 +1,6 @@
 import pool from "../../db/pool.js";
 
-export const listarStock = async (req, res) => {
+export const listarStockkkk = async (req, res) => {
   try {
     const { sucursal_id } = req.query;
 
@@ -81,6 +81,55 @@ export const listarStock = async (req, res) => {
 
   GROUP BY p.id, s.cantidad
   ORDER BY p.nombre
+  `,
+      [sucursal_id],
+    );
+
+    res.json(rows);
+  } catch (error) {
+    console.error("ERROR LISTAR STOCK:", error);
+    res.status(500).json({ message: "Error al listar stock" });
+  }
+};
+
+
+export const listarStock = async (req, res) => {
+  try {
+    const { sucursal_id } = req.query;
+
+    if (!sucursal_id) {
+      return res.status(400).json({
+        message: "Sucursal requerida",
+      });
+    }
+
+    const [rows] = await pool.query(
+      `
+  SELECT 
+  p.id,
+  p.codigo,
+  CONCAT(
+    IFNULL(m.nombre, ''),
+    IF(m.nombre IS NOT NULL, ' ', ''),
+    p.nombre,
+    IF(p.descripcion IS NOT NULL AND p.descripcion != '', CONCAT(' ', p.descripcion), '')
+  ) AS nombre,
+
+  SUM(l.cantidad_actual) AS cantidad,
+
+  SUM(l.cantidad_actual * l.costo_unitario) AS costo_total,
+
+  p.precio_venta,
+
+  SUM(l.cantidad_actual) * p.precio_venta AS total_venta_realizable
+
+FROM lotes l
+JOIN productos p ON p.id = l.producto_id
+LEFT JOIN marcas m ON m.id = p.marca_id
+WHERE l.sucursal_id = ?
+  AND l.cantidad_actual > 0
+GROUP BY p.id
+ORDER BY p.nombre
   `,
       [sucursal_id],
     );
